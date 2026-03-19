@@ -486,6 +486,80 @@
         overflow: auto;
       }
 
+      .timeline-panel {
+        margin-top: 10px;
+      }
+
+      .timeline-body {
+        display: grid;
+        gap: 10px;
+      }
+
+      .timeline-controls {
+        display: grid;
+        gap: 6px;
+      }
+
+      .timeline-time {
+        font-size: 11px;
+        color: var(--ink-soft);
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .timeline-track-list {
+        display: grid;
+        gap: 6px;
+        max-height: 220px;
+        overflow: auto;
+      }
+
+      .timeline-track {
+        background: rgba(255, 255, 255, 0.18);
+        border: 1px solid rgba(58, 39, 86, 0.24);
+        padding: 8px;
+        display: grid;
+        gap: 6px;
+      }
+
+      .timeline-track-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+        color: #2d1255;
+      }
+
+      .timeline-track-bar {
+        position: relative;
+        height: 16px;
+        background: #ded4f4;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .timeline-track-fill {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        background: linear-gradient(90deg, #9469ff, #4e2d9f);
+      }
+
+      .timeline-track-range {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .timeline-track-range input {
+        width: 100%;
+      }
+
+      .timeline-track-list .timeline-track:hover {
+        border-color: #9d73ff;
+      }
+
       .layer-row-card {
         padding: 10px;
         background: rgba(255, 255, 255, 0.26);
@@ -813,6 +887,29 @@
                 <div class="meta" id="fps-meta">Playback FPS: -- • Preview FPS: --</div>
                 <div class="status" id="status-text">Ready. Upload a video for motion playback and export.</div>
               </div>
+
+              <section class="panel-group timeline-panel" aria-label="Timeline">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <h2>Timeline</h2>
+                  </div>
+                  <span>Clip Trimmer</span>
+                </div>
+                <div class="panel-body timeline-body">
+                  <div class="copy-box">
+                    <strong>Timeline</strong>
+                    <span>Drag start/end points to trim layers, and scrub the playhead across your source clip.</span>
+                  </div>
+                  <div class="timeline-controls">
+                    <label for="playhead-range">Playhead</label>
+                    <input id="playhead-range" type="range" min="0" max="100" value="0" step="0.1" />
+                    <div class="timeline-time">
+                      <output id="current-time">0:00</output> / <output id="duration-time">0:00</output>
+                    </div>
+                  </div>
+                  <div class="timeline-track-list" id="timeline-track-list"></div>
+                </div>
+              </section>
 
               <input id="video-input" type="file" accept="video/mp4,video/webm,video/quicktime" />
               <input id="preset-input" type="file" accept="application/json,.json" />

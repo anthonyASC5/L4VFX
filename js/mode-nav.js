@@ -1,12 +1,9 @@
 (function () {
   const TAB_CONFIG = [
-    { href: "./datamosh.html", label: "Data Mosh", pixel: true, aliases: ["./index.html", "./"] },
+    { href: "./motionvideo.html", label: "Motion Editor", pixel: false, aliases: ["./index.html", "./"] },
     { href: "./crtvideo.html", label: "CRT Video", pixel: false },
-    { href: "./motionvideo.html", label: "Motion Video", pixel: false },
     { href: "./data1.html", label: "Data1", pixel: true },
-    { href: "./datamosh-v1.html", label: "V1", pixel: true },
-    { href: "./datamosh-v2.html", label: "V2", pixel: true },
-    { href: "./datamosh-v3.html", label: "V3", pixel: true },
+    { href: "./blob-transition.html", label: "Blob", pixel: true },
   ];
 
   function ensurePixelFont() {
@@ -67,10 +64,6 @@
   function canonicalPath(pathname) {
     const shortPath = pathname.split("/").pop() || "index.html";
     const localPath = shortPath ? `./${shortPath}` : "./";
-    const searchParams = new URLSearchParams(window.location.search);
-    if (localPath === "./crtvideo.html" && searchParams.get("workspace") === "motion") {
-      return "./motionvideo.html";
-    }
     const match = TAB_CONFIG.find((tab) => tab.href === localPath || tab.aliases?.includes(localPath));
     return match?.href || localPath;
   }
@@ -97,13 +90,13 @@
 
     const logo = document.createElement("a");
     logo.className = "site-home-logo";
-    logo.href = "./datamosh.html";
+    logo.href = "./motionvideo.html";
     if (window.self !== window.top) {
       logo.target = "_top";
     }
-    logo.setAttribute("aria-label", "Datamosh home");
-    logo.innerHTML = "<span>DATAMOSH</span>";
-    if (canonicalPath(window.location.pathname) === "./datamosh.html") {
+    logo.setAttribute("aria-label", "Motion Editor home");
+    logo.innerHTML = "<span>VIDEO</span>";
+    if (canonicalPath(window.location.pathname) === "./motionvideo.html") {
       logo.classList.add("is-home");
     }
     document.body.append(logo);

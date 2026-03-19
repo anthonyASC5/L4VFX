@@ -469,10 +469,14 @@ export function createVideoWorkspace({
   const layersList = document.getElementById("layers-list");
   const layersEmpty = document.getElementById("layers-empty");
   const layerSelectionLabel = document.getElementById("layer-selection-label");
+  const timelineTrackList = document.getElementById("timeline-track-list");
+  const playheadRange = document.getElementById("playhead-range");
+  const currentTimeOutput = document.getElementById("current-time");
+  const durationTimeOutput = document.getElementById("duration-time");
   const effectRack = document.getElementById("effects-rack");
   const collapsiblePanelHeads = Array.from(document.querySelectorAll(".panel-head[data-collapsible]"));
 
-  if (!canvas || !sourceVideo || !fileInput || !layersList || !layersEmpty) {
+  if (!canvas || !sourceVideo || !fileInput || !layersList || !layersEmpty || !timelineTrackList || !playheadRange) {
     throw new Error("Motion Video workspace markup is incomplete.");
   }
 
@@ -777,11 +781,57 @@ export function createVideoWorkspace({
     return getLayerById(selectedLayerId);
   }
 
+  function isLayerActive(layer, currentTime = sourceVideo.currentTime) {
+    if (!layer) {
+      return false;
+    }
+    if (layer.type === "video") {
+      return true;
+    }
+    const start = Number.isFinite(layer.start) ? layer.start : 0;
+    const end = Number.isFinite(layer.end) ? layer.end : getMediaDuration();
+    return currentTime >= start && currentTime <= end;
+  }
+
+  function updateTimelinePlayhead() {
+    const duration = getMediaDuration();
+    if (playheadRange) {
+      playheadRange.max = String(duration);
+      playheadRange.value = String(sourceVideo.currentTime || 0);
+    }
+    if (currentTimeOutput) {
+      currentTimeOutput.value = formatTime(sourceVideo.currentTime || 0);
+      currentTimeOutput.textContent = formatTime(sourceVideo.currentTime || 0);
+    }
+    if (durationTimeOutput) {
+      durationTimeOutput.value = formatTime(duration);
+      durationTimeOutput.textContent = formatTime(duration);
+    }
+  }
+
   function getCanvasSize() {
     return {
       width: canvas.width || 1280,
       height: canvas.height || 720,
     };
+  }
+
+  function getMediaDuration() {
+    const duration = Number(sourceVideo.duration);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return 1;
+    }
+    return duration;
+  }
+
+  function formatTime(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "0:00";
+    }
+    const sec = Math.floor(seconds);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
   function hasSourceFrame() {
@@ -948,6 +998,8 @@ export function createVideoWorkspace({
         opacity: 1,
         controlsOpen: false,
         params: {},
+        start: 0,
+        end: getMediaDuration(),
         runtime: createLayerRuntime(width, height, sharedLayerFrameRuntime),
       };
     }
@@ -968,6 +1020,8 @@ export function createVideoWorkspace({
       params: cloneParams(definition.defaultParams),
       automations: cloneAutomations(definition, definition.defaultParams),
       automationOpen: false,
+      start: 0,
+      end: getMediaDuration(),
       runtime: createLayerRuntime(width, height, sharedLayerFrameRuntime),
     };
   }
@@ -1268,6 +1322,61 @@ export function createVideoWorkspace({
     });
   }
 
+  function renderTimelineTracks() {
+    if (!timelineTrackList) {
+      return;
+    }
+
+    const duration = getMediaDuration();
+    timelineTrackList.innerHTML = "";
+    [...layers].reverse().forEach((layer) => {
+      const track = document.createElement("div");
+      track.className = "timeline-track";
+      track.dataset.layerId = String(layer.id);
+      track.innerHTML = `
+        <div class="timeline-track-meta">
+          <span>${layer.name}</span>
+          <span>${formatTime(layer.start || 0)} - ${formatTime(layer.end || duration)}</span>
+        </div>
+        <div class="timeline-track-bar">
+          <div class="timeline-track-fill" style="width: ${Math.max(0, Math.min(100, ((Math.max(0, layer.end || duration) - (layer.start || 0)) / duration) * 100))}%"></div>
+        </div>
+        <div class="timeline-track-range">
+          <label><span>Start</span><input data-track-start="${layer.id}" type="number" min="0" max="${duration}" step="0.05" value="${layer.start ?? 0}" /></label>
+          <label><span>End</span><input data-track-end="${layer.id}" type="number" min="0" max="${duration}" step="0.05" value="${layer.end ?? duration}" /></label>
+        </div>
+      `;
+      timelineTrackList.append(track);
+
+      track.addEventListener("click", () => {
+        selectedLayerId = layer.id;
+        renderLayerList();
+        syncLayerSelection();
+      });
+    });
+
+    timelineTrackList.querySelectorAll("[data-track-start], [data-track-end]").forEach((input) => {
+      input.addEventListener("change", (event) => {
+        const target = event.target;
+        const layerId = Number(target.dataset.trackStart || target.dataset.trackEnd);
+        const layer = getLayerById(layerId);
+        if (!layer) {
+          return;
+        }
+
+        const value = clamp(Number(target.value), 0, duration);
+        if (target.dataset.trackStart) {
+          layer.start = Math.min(value, layer.end ?? duration);
+        } else {
+          layer.end = Math.max(value, layer.start ?? 0);
+        }
+
+        requestPreviewRefresh();
+        renderTimelineTracks();
+      });
+    });
+  }
+
   function requestPreviewRefresh() {
     if (!hasSourceFrame()) {
       return;
@@ -1400,6 +1509,7 @@ export function createVideoWorkspace({
       layersList.append(row);
     });
 
+    renderTimelineTracks();
   }
 
   function addLayer(type) {
@@ -1733,6 +1843,11 @@ export function createVideoWorkspace({
       return;
     }
 
+    if (!isLayerActive(layer)) {
+      layer.runtime.ctx.clearRect(0, 0, layer.runtime.canvas.width, layer.runtime.canvas.height);
+      return;
+    }
+
     withEvaluatedLayerParams(layer, () => {
       renderEffectLayer({
         layer,
@@ -1774,7 +1889,7 @@ export function createVideoWorkspace({
     compositeCtx.fillStyle = "#000000";
     compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
-    const activeLayers = layers.filter((layer) => layer.visible && layer.opacity > 0);
+    const activeLayers = layers.filter((layer) => layer.visible && layer.opacity > 0 && (layer.type === "video" || isLayerActive(layer)));
     const needsAnalysis = activeLayers.some((layer) => layer.type !== "video" && layerNeedsSourceImageData(layer));
     const sourceImageData = needsAnalysis ? sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height) : null;
 
@@ -1827,6 +1942,7 @@ export function createVideoWorkspace({
     samplePreviewFps(timestamp);
     samplePlaybackFps(timestamp);
     updateFpsReadout();
+    updateTimelinePlayhead();
 
     if (needsContinuousRender()) {
       renderHandle = requestAnimationFrame(renderFrame);
@@ -2182,6 +2298,17 @@ export function createVideoWorkspace({
   });
   playButton?.addEventListener("click", () => {
     togglePlayback();
+  });
+  playheadRange?.addEventListener("input", () => {
+    const value = Number(playheadRange.value);
+    if (Number.isFinite(value) && sourceVideo.duration) {
+      sourceVideo.currentTime = clamp(value, 0, sourceVideo.duration);
+      updateTimelinePlayhead();
+      requestPreviewRefresh();
+    }
+  });
+  sourceVideo?.addEventListener("timeupdate", () => {
+    updateTimelinePlayhead();
   });
   randomizeButton?.addEventListener("click", () => {
     randomizeEffects();
