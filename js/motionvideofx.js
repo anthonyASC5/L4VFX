@@ -1005,10 +1005,10 @@ const EFFECT_RACK_GROUP_ORDER = Object.freeze({
 });
 
 const EFFECT_RACK_GROUP_LABELS = Object.freeze({
-  tracking: "Tracking",
-  color: "Color Effects",
-  particles: "Particle Trackers",
-  new: "NEW EFFECTS TESTING",
+  tracking: "Motion",
+  color: "Color + Style",
+  particles: "Particles",
+  new: "Experimental",
 });
 
 const EFFECT_TYPE_TO_RACK_GROUP = Object.freeze({

@@ -86,13 +86,28 @@ const RANDOM_EFFECT_GROUP_RULES = Object.freeze({
   tracking: Object.freeze({ min: 3, max: 4, label: "tracking effect" }),
   particles: Object.freeze({ min: 0, max: 1, label: "particle tracker" }),
 });
-const PRESET_FILE_VERSION = 2;
+const PRESET_FILE_VERSION = 3;
 const PRESET_APP_ID = "motion-video-preset";
 const FPS_SAMPLE_WINDOW_MS = 500;
 const FPS_SMOOTHING = 0.32;
+const MIN_LAYER_DURATION = 0.05;
+const TIMELINE_SNAP_INTERVAL = 0.1;
+const TIMELINE_AUTOMATION_INTERVAL = 10;
+const TIMELINE_AUTOMATION_POLYLINE_STEPS = 8;
+const TIMELINE_AUTOMATION_COLORS = Object.freeze([
+  "#ffd648",
+  "#5ce1ff",
+  "#ff7ac6",
+  "#87f26d",
+  "#ff9f43",
+  "#9d8cff",
+  "#53f4c3",
+]);
 const AUTOMATION_CURVES = Object.freeze([
   { value: "linear", label: "Linear" },
-  { value: "ease", label: "Ease" },
+  { value: "easeIn", label: "Ease In" },
+  { value: "easeOut", label: "Ease Out" },
+  { value: "easeInOut", label: "Ease In / Out" },
   { value: "exponential", label: "Exponential" },
   { value: "pulse", label: "Pulse" },
 ]);
@@ -102,7 +117,26 @@ function clamp(value, min, max) {
 }
 
 function sanitizeAutomationCurve(curve) {
+  if (curve === "ease") {
+    return "easeInOut";
+  }
   return AUTOMATION_CURVES.some((option) => option.value === curve) ? curve : "linear";
+}
+
+function applyAutomationCurve(curve, progress) {
+  let t = clamp(progress, 0, 1);
+  if (curve === "easeIn") {
+    t *= t;
+  } else if (curve === "easeOut") {
+    t = 1 - ((1 - t) * (1 - t));
+  } else if (curve === "easeInOut") {
+    t = t * t * (3 - (2 * t));
+  } else if (curve === "exponential") {
+    t = Math.pow(t, 2.5);
+  } else if (curve === "pulse") {
+    t = Math.sin(t * 20) * 0.5 + 0.5;
+  }
+  return clamp(t, 0, 1);
 }
 
 function smoothMetric(previous, next, amount = FPS_SMOOTHING) {
@@ -211,10 +245,22 @@ function togglePanel(head) {
   }
 
   group.classList.toggle("collapsed");
+  syncPanelToggle(head);
+}
+
+function syncPanelToggle(head) {
+  const group = head.closest("[data-panel-group]");
+  if (!group) {
+    return;
+  }
+
   const expanded = !group.classList.contains("collapsed");
   const toggle = head.querySelector(".hud-toggle");
   if (toggle) {
     toggle.setAttribute("aria-expanded", String(expanded));
+    if (toggle.textContent.trim() === "▾" || toggle.textContent.trim() === "▸") {
+      toggle.textContent = expanded ? "▾" : "▸";
+    }
   }
 }
 
@@ -280,6 +326,9 @@ function cloneAutomationConfig(control, config, fallbackValue) {
     start: sanitizeAutomationEndpoint(control, config?.start, safeValue),
     end: sanitizeAutomationEndpoint(control, config?.end, safeValue),
     curve: sanitizeAutomationCurve(config?.curve),
+    timelineValues: control?.kind === "toggle" || !Array.isArray(config?.timelineValues)
+      ? null
+      : config.timelineValues.map((value) => sanitizeAutomationEndpoint(control, value, safeValue)),
   };
 }
 
@@ -332,6 +381,14 @@ function formatAutomationControlValue(control, value) {
     return value ? "true" : "false";
   }
   return formatNumericControlValue(control, value);
+}
+
+function formatPercentage(value) {
+  return `${Math.round(clamp(value, 0, 1) * 100)}%`;
+}
+
+function isFiniteNumber(value) {
+  return Number.isFinite(Number(value));
 }
 
 function renderControlMarkup(control, value) {
@@ -469,11 +526,22 @@ export function createVideoWorkspace({
   const layersList = document.getElementById("layers-list");
   const layersEmpty = document.getElementById("layers-empty");
   const layerSelectionLabel = document.getElementById("layer-selection-label");
+  const timelineComposer = document.getElementById("timeline-composer");
+  const timelineRuler = document.getElementById("timeline-ruler");
   const timelineTrackList = document.getElementById("timeline-track-list");
+  const timelineSnapButton = document.getElementById("timeline-snap-button");
+  const timelineSelectionNote = document.getElementById("timeline-selection-note");
   const playheadRange = document.getElementById("playhead-range");
   const currentTimeOutput = document.getElementById("current-time");
   const durationTimeOutput = document.getElementById("duration-time");
   const effectRack = document.getElementById("effects-rack");
+  const inspectorTabs = Array.from(document.querySelectorAll(".inspector-tab[data-inspector-tab]"));
+  const inspectorPanels = Array.from(document.querySelectorAll(".inspector-panel[data-inspector-panel]"));
+  const selectedLayerSummary = document.getElementById("selected-layer-summary");
+  const selectedLayerTiming = document.getElementById("selected-layer-timing");
+  const selectedLayerActions = document.getElementById("selected-layer-actions");
+  const selectedLayerControls = document.getElementById("selected-layer-controls");
+  const selectedLayerComposite = document.getElementById("selected-layer-composite");
   const collapsiblePanelHeads = Array.from(document.querySelectorAll(".panel-head[data-collapsible]"));
 
   if (!canvas || !sourceVideo || !fileInput || !layersList || !layersEmpty || !timelineTrackList || !playheadRange) {
@@ -517,6 +585,11 @@ export function createVideoWorkspace({
   let selectedLayerId = null;
   let splitScreenMode = SPLIT_SCREEN_MODES.off;
   let targetFps = Math.max(1, Number(fpsSelect?.value || 30));
+  let timelineDragState = null;
+  let timelineAutomationDragState = null;
+  let timelineReorderState = null;
+  let timelineSnapEnabled = true;
+  let activeInspectorTab = inspectorTabs.find((tab) => tab.classList.contains("active"))?.dataset.inspectorTab || "clip";
   const fpsState = {
     playbackFps: null,
     previewFps: null,
@@ -795,18 +868,21 @@ export function createVideoWorkspace({
 
   function updateTimelinePlayhead() {
     const duration = getMediaDuration();
+    const currentTime = sourceVideo.currentTime || 0;
+    const progress = duration > 0 ? clamp(currentTime / duration, 0, 1) : 0;
     if (playheadRange) {
       playheadRange.max = String(duration);
-      playheadRange.value = String(sourceVideo.currentTime || 0);
+      playheadRange.value = String(currentTime);
     }
     if (currentTimeOutput) {
-      currentTimeOutput.value = formatTime(sourceVideo.currentTime || 0);
-      currentTimeOutput.textContent = formatTime(sourceVideo.currentTime || 0);
+      currentTimeOutput.value = formatTime(currentTime);
+      currentTimeOutput.textContent = formatTime(currentTime);
     }
     if (durationTimeOutput) {
       durationTimeOutput.value = formatTime(duration);
       durationTimeOutput.textContent = formatTime(duration);
     }
+    timelineComposer?.style.setProperty("--playhead-position", `${progress * 100}%`);
   }
 
   function getCanvasSize() {
@@ -834,6 +910,15 @@ export function createVideoWorkspace({
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
+  function formatTimePrecise(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "0:00.00";
+    }
+    const m = Math.floor(seconds / 60);
+    const s = seconds - m * 60;
+    return `${m}:${s.toFixed(2).padStart(5, "0")}`;
+  }
+
   function hasSourceFrame() {
     return Boolean(sourceVideo.src && sourceVideo.videoWidth && sourceVideo.videoHeight);
   }
@@ -859,17 +944,337 @@ export function createVideoWorkspace({
     return effectMap.get(type)?.label || type;
   }
 
+  function getLayerAccent(layer) {
+    return effectMap.get(layer?.type)?.accent || "#7c8aa5";
+  }
+
+  function getTimelineAutomationControls(definition) {
+    return getAutomatableControls(definition).filter((control) => control?.kind !== "toggle");
+  }
+
+  function getTimelineAutomationControl(definition, key) {
+    if (!key) {
+      return null;
+    }
+    return getTimelineAutomationControls(definition).find((control) => control.key === key) || null;
+  }
+
+  function getDefaultTimelineAutomationKey(definition) {
+    return getTimelineAutomationControls(definition)[0]?.key ?? null;
+  }
+
+  function ensureLayerTimelineAutomationKey(layer, definition = effectMap.get(layer?.type)) {
+    if (!layer || layer.type === "video") {
+      return null;
+    }
+    const controls = getTimelineAutomationControls(definition);
+    if (!controls.length) {
+      layer.timelineAutomationKey = null;
+      return null;
+    }
+    if (!controls.some((control) => control.key === layer.timelineAutomationKey)) {
+      layer.timelineAutomationKey = controls[0].key;
+    }
+    return layer.timelineAutomationKey;
+  }
+
+  function getLayerTimelineAutomationControl(layer, definition = effectMap.get(layer?.type)) {
+    const key = ensureLayerTimelineAutomationKey(layer, definition);
+    return getTimelineAutomationControl(definition, key);
+  }
+
+  function getTimelineAutomationColor(definition, key) {
+    const controls = getTimelineAutomationControls(definition);
+    const index = Math.max(0, controls.findIndex((control) => control.key === key));
+    return TIMELINE_AUTOMATION_COLORS[index % TIMELINE_AUTOMATION_COLORS.length];
+  }
+
   function sanitizeBlendMode(blend) {
     return BLEND_MODE_OPTIONS.some((option) => option.value === blend) ? blend : "normal";
   }
 
-  function getMediaProgress() {
-    const duration = Number(sourceVideo.duration);
-    const currentTime = Number(sourceVideo.currentTime);
+  function getLayerWindow(layer, duration = getMediaDuration()) {
+    if (!layer) {
+      return {
+        start: 0,
+        end: duration,
+        clipDuration: duration,
+      };
+    }
+    const start = layer.type === "video" ? 0 : clamp(layer.start ?? 0, 0, duration);
+    const end = layer.type === "video" ? duration : clamp(layer.end ?? duration, 0, duration);
+    return {
+      start,
+      end,
+      clipDuration: Math.max(MIN_LAYER_DURATION, end - start),
+    };
+  }
+
+  function getLayerAutomationOffsets(layer, duration = getMediaDuration()) {
+    const { clipDuration } = getLayerWindow(layer, duration);
+    const offsets = [0];
+
+    for (let offset = TIMELINE_AUTOMATION_INTERVAL; offset < clipDuration; offset += TIMELINE_AUTOMATION_INTERVAL) {
+      offsets.push(Number(offset.toFixed(3)));
+    }
+
+    const lastOffset = offsets[offsets.length - 1];
+    if (Math.abs(lastOffset - clipDuration) > 0.001) {
+      offsets.push(Number(clipDuration.toFixed(3)));
+    }
+
+    return offsets;
+  }
+
+  function getAutomationDisplayRatio(control, value) {
+    if (!control) {
+      return 1;
+    }
+    const range = Number(control.max) - Number(control.min);
+    if (!Number.isFinite(range) || Math.abs(range) < 0.0001) {
+      return 0.5;
+    }
+    return clamp((Number(value) - Number(control.min)) / range, 0, 1);
+  }
+
+  function buildTimelineAutomationSeedValues(layer, control, config, duration = getMediaDuration()) {
+    const offsets = getLayerAutomationOffsets(layer, duration);
+    const { clipDuration } = getLayerWindow(layer, duration);
+    const fallbackValue = layer?.params?.[control.key] ?? control.min;
+    const startValue = sanitizeAutomationEndpoint(control, config?.start, fallbackValue);
+    const endValue = sanitizeAutomationEndpoint(control, config?.end, fallbackValue);
+    return offsets.map((offset, index) => {
+      const progress = clipDuration <= MIN_LAYER_DURATION
+        ? (index === offsets.length - 1 ? 1 : 0)
+        : clamp(offset / clipDuration, 0, 1);
+      const curvedProgress = applyAutomationCurve(config?.curve, progress);
+      return clampControlValue(control, startValue + ((endValue - startValue) * curvedProgress));
+    });
+  }
+
+  function syncAutomationBoundariesFromValues(control, config, values, fallbackValue) {
+    if (!control || !config || !Array.isArray(values) || !values.length) {
+      return;
+    }
+    config.start = sanitizeAutomationEndpoint(control, values[0], fallbackValue);
+    config.end = sanitizeAutomationEndpoint(control, values.at(-1), fallbackValue);
+  }
+
+  function normalizeLayerControlAutomationValues(layer, control, duration = getMediaDuration()) {
+    if (!layer || layer.type === "video" || !control || control.kind === "toggle") {
+      return [];
+    }
+
+    const definition = effectMap.get(layer.type);
+    if (!layer.automations) {
+      layer.automations = cloneAutomations(definition, layer.params);
+    }
+
+    const fallbackValue = layer.params?.[control.key] ?? control.min;
+    const config = layer.automations[control.key] || cloneAutomationConfig(control, null, fallbackValue);
+    const offsets = getLayerAutomationOffsets(layer, duration);
+    const seededValues = buildTimelineAutomationSeedValues(layer, control, config, duration);
+    const previousValues = Array.isArray(config.timelineValues) ? config.timelineValues : [];
+    const nextValues = offsets.map((_, index) => {
+      const existing = previousValues[index];
+      const fallback = seededValues[index] ?? fallbackValue;
+      return isFiniteNumber(existing) ? clampControlValue(control, Number(existing)) : clampControlValue(control, fallback);
+    });
+
+    config.timelineValues = nextValues;
+    syncAutomationBoundariesFromValues(control, config, nextValues, fallbackValue);
+    layer.automations[control.key] = config;
+    return nextValues;
+  }
+
+  function sampleLayerControlAutomation(layer, control, currentTime = Number(sourceVideo.currentTime), duration = getMediaDuration()) {
+    if (!layer || !control || control.kind === "toggle") {
+      return layer?.params?.[control?.key];
+    }
+
+    const baseValue = layer.params?.[control.key] ?? control.min;
+    const config = layer.automations?.[control.key];
+    if (!config?.enabled) {
+      return baseValue;
+    }
+
+    const offsets = getLayerAutomationOffsets(layer, duration);
+    const values = normalizeLayerControlAutomationValues(layer, control, duration);
+    const { start, clipDuration } = getLayerWindow(layer, duration);
+    const localTime = clamp((Number.isFinite(currentTime) ? currentTime : 0) - start, 0, clipDuration);
+
+    if (offsets.length <= 1) {
+      return clampControlValue(control, values[0] ?? baseValue);
+    }
+
+    for (let index = 0; index < offsets.length - 1; index += 1) {
+      const leftTime = offsets[index];
+      const rightTime = offsets[index + 1];
+      if (localTime > rightTime) {
+        continue;
+      }
+
+      const leftValue = clampControlValue(control, values[index] ?? baseValue);
+      const rightValue = clampControlValue(control, values[index + 1] ?? leftValue);
+      const segmentDuration = Math.max(0.0001, rightTime - leftTime);
+      const segmentProgress = clamp((localTime - leftTime) / segmentDuration, 0, 1);
+      const curvedProgress = applyAutomationCurve(config.curve, segmentProgress);
+      return clampControlValue(control, leftValue + ((rightValue - leftValue) * curvedProgress));
+    }
+
+    return clampControlValue(control, values.at(-1) ?? baseValue);
+  }
+
+  function setLayerControlAutomationValue(layer, control, pointIndex, nextValue, duration = getMediaDuration()) {
+    if (!layer || layer.type === "video" || !control || control.kind === "toggle") {
+      return false;
+    }
+
+    const values = normalizeLayerControlAutomationValues(layer, control, duration);
+    if (pointIndex < 0 || pointIndex >= values.length) {
+      return false;
+    }
+
+    const config = layer.automations?.[control.key] || cloneAutomationConfig(control, null, layer.params?.[control.key]);
+    const sanitizedValue = clampControlValue(control, nextValue);
+    const tolerance = Math.max(control.step || 0, 10 ** -(getControlDigits(control)));
+    if (Math.abs(values[pointIndex] - sanitizedValue) <= tolerance * 0.25) {
+      return false;
+    }
+
+    values[pointIndex] = sanitizedValue;
+    config.enabled = true;
+    config.timelineValues = values;
+    syncAutomationBoundariesFromValues(control, config, values, layer.params?.[control.key] ?? control.min);
+    layer.automations[control.key] = config;
+    return true;
+  }
+
+  function buildAutomationPolyline(offsets, values, control, clipDuration, curve) {
+    if (!Array.isArray(offsets) || !offsets.length || !Array.isArray(values) || !values.length || !control) {
+      return "";
+    }
+
+    const points = [];
+    const pushPoint = (time, value) => {
+      const x = clipDuration <= 0 ? 0 : (time / clipDuration) * 100;
+      const y = (1 - getAutomationDisplayRatio(control, value)) * 100;
+      points.push(`${Number(x.toFixed(3))},${Number(y.toFixed(3))}`);
+    };
+
+    pushPoint(offsets[0], values[0]);
+    for (let index = 0; index < offsets.length - 1; index += 1) {
+      const leftTime = offsets[index];
+      const rightTime = offsets[index + 1];
+      const leftValue = values[index];
+      const rightValue = values[index + 1];
+      const segmentDuration = Math.max(0.0001, rightTime - leftTime);
+      for (let step = 1; step <= TIMELINE_AUTOMATION_POLYLINE_STEPS; step += 1) {
+        const progress = step / TIMELINE_AUTOMATION_POLYLINE_STEPS;
+        const curvedProgress = applyAutomationCurve(curve, progress);
+        const sampleTime = leftTime + (segmentDuration * progress);
+        const sampleValue = leftValue + ((rightValue - leftValue) * curvedProgress);
+        pushPoint(sampleTime, sampleValue);
+      }
+    }
+
+    return points.join(" ");
+  }
+
+  function normalizeLayerOpacityAutomation(layer, duration = getMediaDuration()) {
+    if (!layer || layer.type === "video") {
+      return [];
+    }
+
+    const offsets = getLayerAutomationOffsets(layer, duration);
+    const previousValues = Array.isArray(layer.opacityAutomationValues) ? layer.opacityAutomationValues : [];
+    const nextValues = offsets.map((_, index) => {
+      const existing = previousValues[index];
+      return isFiniteNumber(existing) ? clamp(Number(existing), 0, 1) : 1;
+    });
+    layer.opacityAutomationValues = nextValues;
+    return nextValues;
+  }
+
+  function sampleLayerOpacityAutomation(layer, currentTime = Number(sourceVideo.currentTime)) {
+    if (!layer || layer.type === "video") {
+      return 1;
+    }
+
+    const duration = getMediaDuration();
+    const offsets = getLayerAutomationOffsets(layer, duration);
+    const values = normalizeLayerOpacityAutomation(layer, duration);
+    const { start, clipDuration } = getLayerWindow(layer, duration);
+    const localTime = clamp((Number.isFinite(currentTime) ? currentTime : 0) - start, 0, clipDuration);
+
+    if (offsets.length <= 1) {
+      return clamp(values[0] ?? 1, 0, 1);
+    }
+
+    for (let index = 0; index < offsets.length - 1; index += 1) {
+      const leftTime = offsets[index];
+      const rightTime = offsets[index + 1];
+      if (localTime > rightTime) {
+        continue;
+      }
+
+      const leftValue = clamp(values[index] ?? 1, 0, 1);
+      const rightValue = clamp(values[index + 1] ?? leftValue, 0, 1);
+      const segmentDuration = Math.max(0.0001, rightTime - leftTime);
+      const t = clamp((localTime - leftTime) / segmentDuration, 0, 1);
+      return leftValue + (rightValue - leftValue) * t;
+    }
+
+    return clamp(values.at(-1) ?? 1, 0, 1);
+  }
+
+  function setLayerOpacityAutomationValue(layer, pointIndex, nextValue, duration = getMediaDuration()) {
+    if (!layer || layer.type === "video") {
+      return false;
+    }
+
+    const values = normalizeLayerOpacityAutomation(layer, duration);
+    if (pointIndex < 0 || pointIndex >= values.length) {
+      return false;
+    }
+
+    const sanitizedValue = clamp(Number(nextValue), 0, 1);
+    if (Math.abs(values[pointIndex] - sanitizedValue) < 0.0001) {
+      return false;
+    }
+
+    values[pointIndex] = Number(sanitizedValue.toFixed(3));
+    layer.opacityAutomationValues = values;
+    return true;
+  }
+
+  function getLayerProgress(layer, currentTime = Number(sourceVideo.currentTime)) {
+    const duration = getMediaDuration();
+    const { start, end, clipDuration } = getLayerWindow(layer, duration);
+    const safeCurrentTime = Number.isFinite(currentTime) ? currentTime : 0;
     if (!Number.isFinite(duration) || duration <= 0) {
       return 0;
     }
-    return clamp((Number.isFinite(currentTime) ? currentTime : 0) / duration, 0, 1);
+    if (layer?.type === "video") {
+      return clamp(safeCurrentTime / duration, 0, 1);
+    }
+    if (clipDuration <= MIN_LAYER_DURATION) {
+      return safeCurrentTime >= end ? 1 : 0;
+    }
+    return clamp((safeCurrentTime - start) / clipDuration, 0, 1);
+  }
+
+  function countEnabledAutomations(layer) {
+    return Object.values(layer?.automations || {}).filter((config) => config?.enabled).length;
+  }
+
+  function getActiveAutomationLabels(layer, definition, limit = 2) {
+    const automations = layer?.automations || {};
+    const controls = getAutomatableControls(definition);
+    return controls
+      .filter((control) => automations[control.key]?.enabled)
+      .slice(0, limit)
+      .map((control) => control.label);
   }
 
   function evaluateAutomation(control, baseValue, config, progress) {
@@ -877,15 +1282,7 @@ export function createVideoWorkspace({
       return baseValue;
     }
 
-    let t = clamp(progress, 0, 1);
-    if (config.curve === "ease") {
-      t = t * t * (3 - 2 * t);
-    } else if (config.curve === "exponential") {
-      t = Math.pow(t, 2.5);
-    } else if (config.curve === "pulse") {
-      t = Math.sin(t * 20) * 0.5 + 0.5;
-    }
-
+    const t = applyAutomationCurve(config.curve, progress);
     const start = sanitizeAutomationEndpoint(control, config.start, baseValue);
     const end = sanitizeAutomationEndpoint(control, config.end, baseValue);
     if (control.kind === "toggle") {
@@ -899,7 +1296,9 @@ export function createVideoWorkspace({
       return layer.params;
     }
 
-    const progress = getMediaProgress();
+    const progress = getLayerProgress(layer);
+    const duration = getMediaDuration();
+    const currentTime = Number(sourceVideo.currentTime);
     const evaluatedParams = { ...layer.params };
     let hasAutomation = false;
     getAutomatableControls(definition).forEach((control) => {
@@ -908,7 +1307,11 @@ export function createVideoWorkspace({
         return;
       }
       hasAutomation = true;
-      evaluatedParams[control.key] = evaluateAutomation(control, layer.params[control.key], config, progress);
+      if (control.kind === "toggle") {
+        evaluatedParams[control.key] = evaluateAutomation(control, layer.params[control.key], config, progress);
+        return;
+      }
+      evaluatedParams[control.key] = sampleLayerControlAutomation(layer, control, currentTime, duration);
     });
 
     return hasAutomation ? evaluatedParams : layer.params;
@@ -1019,7 +1422,9 @@ export function createVideoWorkspace({
       controlsOpen: true,
       params: cloneParams(definition.defaultParams),
       automations: cloneAutomations(definition, definition.defaultParams),
-      automationOpen: false,
+      opacityAutomationValues: [1, 1],
+      automationOpen: true,
+      timelineAutomationKey: getDefaultTimelineAutomationKey(definition),
       start: 0,
       end: getMediaDuration(),
       runtime: createLayerRuntime(width, height, sharedLayerFrameRuntime),
@@ -1093,8 +1498,18 @@ export function createVideoWorkspace({
   function syncLayerSelection() {
     const layer = getSelectedLayer();
     if (layerSelectionLabel) {
-      layerSelectionLabel.textContent = layer && layer.type !== "video" ? layer.name : "Effects";
+      layerSelectionLabel.textContent = layer ? layer.name : "Effects";
     }
+    if (timelineSelectionNote) {
+      if (!layer) {
+        timelineSelectionNote.textContent = "Select a layer to inspect timing and automation.";
+      } else if (layer.type === "video") {
+        timelineSelectionNote.textContent = "Base video selected. Add effects above it, then drag their clips in the timeline.";
+      } else {
+        timelineSelectionNote.textContent = `${layer.name} selected. Drag or trim the clip, then pick a timeline parameter and shape its automation.`;
+      }
+    }
+    renderInspector();
   }
 
   function buildInlineControls(layer) {
@@ -1129,6 +1544,365 @@ export function createVideoWorkspace({
     `;
   }
 
+  function buildEmptyInspectorMarkup(title, message) {
+    return `
+      <div class="inspector-empty">
+        <strong>${title}</strong>
+        <span>${message}</span>
+      </div>
+    `;
+  }
+
+  function getLayerTrackLabel(layer) {
+    if (!layer) {
+      return "None";
+    }
+    if (layer.type === "video") {
+      return "Base Video";
+    }
+    const effectOrder = layers.filter((entry) => entry.type !== "video").reverse();
+    const index = effectOrder.findIndex((entry) => entry.id === layer.id);
+    return index >= 0 ? `FX ${String(index + 1).padStart(2, "0")}` : "FX";
+  }
+
+  function setActiveInspectorTab(nextTab) {
+    activeInspectorTab = nextTab;
+    inspectorTabs.forEach((tab) => {
+      const isActive = tab.dataset.inspectorTab === nextTab;
+      tab.classList.toggle("active", isActive);
+      tab.setAttribute("aria-selected", String(isActive));
+    });
+    inspectorPanels.forEach((panel) => {
+      panel.hidden = panel.dataset.inspectorPanel !== nextTab;
+    });
+  }
+
+  function bindSelectedLayerTimingControls(layer) {
+    if (!layer || !selectedLayerTiming || !selectedLayerActions) {
+      return;
+    }
+
+    const startInput = selectedLayerTiming.querySelector('[data-timing-input="start"]');
+    const endInput = selectedLayerTiming.querySelector('[data-timing-input="end"]');
+    const durationInput = selectedLayerTiming.querySelector('[data-timing-input="duration"]');
+    const duration = getMediaDuration();
+    const currentWindow = getLayerWindow(layer, duration);
+
+    startInput?.addEventListener("change", () => {
+      const nextStart = Number(startInput.value);
+      if (applyLayerTiming(layer, nextStart, currentWindow.end, duration)) {
+        renderLayerList();
+        syncLayerSelection();
+        requestPreviewRefresh();
+      }
+    });
+
+    endInput?.addEventListener("change", () => {
+      const nextEnd = Number(endInput.value);
+      if (applyLayerTiming(layer, currentWindow.start, nextEnd, duration)) {
+        renderLayerList();
+        syncLayerSelection();
+        requestPreviewRefresh();
+      }
+    });
+
+    durationInput?.addEventListener("change", () => {
+      const nextDuration = Math.max(MIN_LAYER_DURATION, Number(durationInput.value) || currentWindow.clipDuration);
+      if (applyLayerTiming(layer, currentWindow.start, currentWindow.start + nextDuration, duration)) {
+        renderLayerList();
+        syncLayerSelection();
+        requestPreviewRefresh();
+      }
+    });
+
+    selectedLayerActions.querySelectorAll("[data-inspector-time-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.inspectorTimeAction;
+        if (action === "jump-start") {
+          setMediaTime(currentWindow.start);
+          return;
+        }
+        if (action === "jump-end") {
+          setMediaTime(currentWindow.end);
+          return;
+        }
+        if (layer.type === "video") {
+          return;
+        }
+
+        if (action === "set-start") {
+          if (applyLayerTiming(layer, sourceVideo.currentTime || currentWindow.start, currentWindow.end, duration)) {
+            renderLayerList();
+            syncLayerSelection();
+            requestPreviewRefresh();
+          }
+          return;
+        }
+        if (action === "set-end") {
+          if (applyLayerTiming(layer, currentWindow.start, sourceVideo.currentTime || currentWindow.end, duration)) {
+            renderLayerList();
+            syncLayerSelection();
+            requestPreviewRefresh();
+          }
+          return;
+        }
+        if (action === "fill-clip") {
+          if (applyLayerTiming(layer, 0, duration, duration)) {
+            renderLayerList();
+            syncLayerSelection();
+            requestPreviewRefresh();
+          }
+          return;
+        }
+        if (action === "duplicate") {
+          duplicateLayer(layer.id);
+          return;
+        }
+        if (action === "delete") {
+          deleteLayer(layer.id);
+        }
+      });
+    });
+  }
+
+  function bindSelectedLayerCompositeControls(layer) {
+    if (!layer || !selectedLayerComposite) {
+      return;
+    }
+
+    const blendSelect = selectedLayerComposite.querySelector('[data-inspector-composite="blend"]');
+    const opacityInput = selectedLayerComposite.querySelector('[data-inspector-composite="opacity"]');
+    const opacityOutput = selectedLayerComposite.querySelector('[data-inspector-composite-output="opacity"]');
+
+    blendSelect?.addEventListener("change", (event) => {
+      layer.blend = event.target.value;
+      renderLayerList();
+      syncLayerSelection();
+      requestPreviewRefresh();
+    });
+
+    opacityInput?.addEventListener("input", (event) => {
+      layer.opacity = Number(event.target.value);
+      if (opacityOutput) {
+        opacityOutput.textContent = formatPercentage(layer.opacity);
+      }
+      renderLayerList();
+      requestPreviewRefresh();
+    });
+
+    opacityInput?.addEventListener("change", () => {
+      syncLayerSelection();
+    });
+
+    selectedLayerComposite.querySelectorAll("[data-inspector-composite-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.inspectorCompositeAction;
+        if (action === "toggle-visibility") {
+          layer.visible = !layer.visible;
+          renderLayerList();
+          syncLayerSelection();
+          requestPreviewRefresh();
+          return;
+        }
+        if (action === "move-up") {
+          moveLayer(layer.id, 1);
+          return;
+        }
+        if (action === "move-down") {
+          moveLayer(layer.id, -1);
+        }
+      });
+    });
+  }
+
+  function renderInspector() {
+    if (!selectedLayerSummary || !selectedLayerTiming || !selectedLayerActions || !selectedLayerControls || !selectedLayerComposite) {
+      return;
+    }
+
+    const layer = getSelectedLayer();
+    if (!layer) {
+      selectedLayerSummary.innerHTML = buildEmptyInspectorMarkup(
+        "No clip selected",
+        "Import a source clip to create the base video track, then add effect layers to inspect and animate them.",
+      );
+      selectedLayerTiming.innerHTML = "";
+      selectedLayerActions.innerHTML = "";
+      selectedLayerControls.innerHTML = buildEmptyInspectorMarkup(
+        "No motion controls yet",
+        "Add an effect layer from the rack and it will expose timing-aware automation here.",
+      );
+      selectedLayerComposite.innerHTML = buildEmptyInspectorMarkup(
+        "Composite stack is empty",
+        "Layer blend, opacity, and track order controls appear here after you load media.",
+      );
+      return;
+    }
+
+    const duration = getMediaDuration();
+    const definition = effectMap.get(layer.type);
+    const accent = getLayerAccent(layer);
+    const { start, end, clipDuration } = getLayerWindow(layer, duration);
+    const enabledAutomationCount = countEnabledAutomations(layer);
+    const automationLabels = getActiveAutomationLabels(layer, definition, 2);
+    const timelineAutomationControl = layer.type === "video" ? null : getLayerTimelineAutomationControl(layer, definition);
+    const timelineAutomationPoints = timelineAutomationControl
+      ? normalizeLayerControlAutomationValues(layer, timelineAutomationControl, duration).length
+      : 0;
+
+    selectedLayerSummary.innerHTML = `
+      <div class="inspector-summary-card" style="--layer-accent: ${accent};">
+        <div class="inspector-summary-head">
+          <div class="inspector-summary-title">
+            <strong>${layer.name}</strong>
+            <span>${buildLayerTypeLabel(layer.type)}</span>
+          </div>
+          <span class="layer-chip is-strong">${layer.visible ? "Visible" : "Hidden"}</span>
+        </div>
+        <div class="layer-chip-row">
+          <span class="layer-chip">${getLayerTrackLabel(layer)}</span>
+          <span class="layer-chip">${formatTimePrecise(start)} - ${formatTimePrecise(end)}</span>
+          ${timelineAutomationControl ? `<span class="layer-chip">Timeline: ${timelineAutomationControl.label}</span>` : ""}
+          ${automationLabels.map((label) => `<span class="layer-chip">${label}</span>`).join("")}
+        </div>
+        <div class="inspector-stat-grid">
+          <div class="inspector-stat">
+            <span class="inspector-stat-label">Clip Length</span>
+            <span class="inspector-stat-value">${formatTimePrecise(clipDuration)}</span>
+          </div>
+          <div class="inspector-stat">
+            <span class="inspector-stat-label">Blend</span>
+            <span class="inspector-stat-value">${BLEND_MODE_OPTIONS.find((option) => option.value === layer.blend)?.label || "Normal"}</span>
+          </div>
+          <div class="inspector-stat">
+            <span class="inspector-stat-label">Opacity</span>
+            <span class="inspector-stat-value">${formatPercentage(layer.opacity)}</span>
+          </div>
+          <div class="inspector-stat">
+            <span class="inspector-stat-label">Automation</span>
+            <span class="inspector-stat-value">${layer.type === "video"
+              ? "Static"
+              : `${enabledAutomationCount} active • ${timelineAutomationPoints} pts`}</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    selectedLayerTiming.innerHTML = `
+      <div class="timing-field">
+        <label for="selected-layer-start">Start</label>
+        <input
+          id="selected-layer-start"
+          data-timing-input="start"
+          type="number"
+          min="0"
+          max="${duration.toFixed(2)}"
+          step="0.01"
+          value="${start.toFixed(2)}"
+          ${layer.type === "video" ? "disabled" : ""}
+        />
+      </div>
+      <div class="timing-field">
+        <label for="selected-layer-end">End</label>
+        <input
+          id="selected-layer-end"
+          data-timing-input="end"
+          type="number"
+          min="${MIN_LAYER_DURATION.toFixed(2)}"
+          max="${duration.toFixed(2)}"
+          step="0.01"
+          value="${end.toFixed(2)}"
+          ${layer.type === "video" ? "disabled" : ""}
+        />
+      </div>
+      <div class="timing-field">
+        <label for="selected-layer-duration">Duration</label>
+        <input
+          id="selected-layer-duration"
+          data-timing-input="duration"
+          type="number"
+          min="${MIN_LAYER_DURATION.toFixed(2)}"
+          max="${duration.toFixed(2)}"
+          step="0.01"
+          value="${clipDuration.toFixed(2)}"
+          ${layer.type === "video" ? "disabled" : ""}
+        />
+      </div>
+      <div class="timing-field">
+        <label>Snap</label>
+        <div class="layer-chip-row">
+          <span class="layer-chip${timelineSnapEnabled ? " is-strong" : ""}">${timelineSnapEnabled ? "Enabled" : "Off"}</span>
+          <span class="layer-chip">0.10s grid</span>
+        </div>
+      </div>
+    `;
+
+    selectedLayerActions.innerHTML = `
+      <button class="mini-button" data-inspector-time-action="jump-start" type="button">Go To In</button>
+      <button class="mini-button" data-inspector-time-action="jump-end" type="button">Go To Out</button>
+      ${layer.type === "video" ? "" : `
+        <button class="mini-button" data-inspector-time-action="set-start" type="button">Set In To Playhead</button>
+        <button class="mini-button" data-inspector-time-action="set-end" type="button">Set Out To Playhead</button>
+        <button class="mini-button" data-inspector-time-action="fill-clip" type="button">Fill Clip</button>
+        <button class="mini-button" data-inspector-time-action="duplicate" type="button">Duplicate</button>
+        <button class="mini-button" data-inspector-time-action="delete" type="button">Delete</button>
+      `}
+    `;
+
+    if (definition?.controls?.length) {
+      selectedLayerControls.innerHTML = `
+        <div class="inspector-control-shell">
+          <div class="layer-inline-panel" data-control-layer="${layer.id}">
+            ${buildInlineControls(layer)}
+          </div>
+        </div>
+      `;
+      bindInlineControls(selectedLayerControls, layer);
+    } else if (layer.type === "video") {
+      selectedLayerControls.innerHTML = buildEmptyInspectorMarkup(
+        "Base clip selected",
+        "The source video does not expose effect parameters. Add an effect layer above it to animate settings over time.",
+      );
+    } else {
+      selectedLayerControls.innerHTML = buildEmptyInspectorMarkup(
+        "No automatable controls",
+        "This effect does not expose parameter automation in the current rack definition.",
+      );
+    }
+
+    selectedLayerComposite.innerHTML = `
+      <div class="settings-grid">
+        <div class="layer-field">
+          <label for="selected-layer-blend">Blend Mode</label>
+          <select id="selected-layer-blend" data-inspector-composite="blend" ${layer.type === "video" ? "disabled" : ""}>
+            ${BLEND_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${option.value === layer.blend ? "selected" : ""}>${option.label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="layer-field">
+          <label for="selected-layer-opacity">Opacity</label>
+          <div class="layer-opacity">
+            <input id="selected-layer-opacity" data-inspector-composite="opacity" type="range" min="0" max="1" step="0.01" value="${layer.opacity.toFixed(2)}" />
+            <output data-inspector-composite-output="opacity">${formatPercentage(layer.opacity)}</output>
+          </div>
+        </div>
+      </div>
+      <div class="inspector-actions">
+        <button class="mini-button ${layer.visible ? "active" : ""}" data-inspector-composite-action="toggle-visibility" type="button">${layer.visible ? "Hide Layer" : "Show Layer"}</button>
+        <button class="mini-button" data-inspector-composite-action="move-up" type="button" ${layer.type === "video" ? "disabled" : ""}>Move Higher</button>
+        <button class="mini-button" data-inspector-composite-action="move-down" type="button" ${layer.type === "video" ? "disabled" : ""}>Move Lower</button>
+      </div>
+      <div class="copy-box">
+        <strong>Composite Notes</strong>
+        <span>${layer.type === "video"
+          ? "The base video remains at the bottom of the sequence. Effect tracks can be dragged above it in the timeline."
+          : `${layer.name} sits on ${getLayerTrackLabel(layer)}. Drag the track header in the timeline to reorder the composite stack visually.`}</span>
+      </div>
+    `;
+
+    bindSelectedLayerTimingControls(layer);
+    bindSelectedLayerCompositeControls(layer);
+  }
+
   function syncInlineControlViews(layer, key, value, control, activeInput = null) {
     const layerSelector = `[data-control-layer="${layer.id}"]`;
     const digits = control?.digits ?? 2;
@@ -1151,6 +1925,33 @@ export function createVideoWorkspace({
       if (slider !== activeInput) {
         slider.value = formattedValue;
       }
+    });
+  }
+
+  function syncLiveInspectorControlViews(layer) {
+    if (!layer || layer.type === "video") {
+      return;
+    }
+
+    const definition = effectMap.get(layer.type);
+    if (!definition?.controls?.length) {
+      return;
+    }
+
+    const currentTime = Number(sourceVideo.currentTime);
+    const duration = getMediaDuration();
+    definition.controls.forEach((control) => {
+      if (control.kind === "toggle") {
+        return;
+      }
+      const value = layer.automations?.[control.key]?.enabled
+        ? sampleLayerControlAutomation(layer, control, currentTime, duration)
+        : layer.params[control.key];
+      const activeElement = document.activeElement;
+      const activeInput = activeElement?.matches?.(`[data-control-layer="${layer.id}"] [data-inline-slider="${control.key}"]`)
+        ? activeElement
+        : null;
+      syncInlineControlViews(layer, control.key, value, control, activeInput);
     });
   }
 
@@ -1220,6 +2021,9 @@ export function createVideoWorkspace({
     ) {
       config.start = nextValue;
       config.end = nextValue;
+      if (Array.isArray(config.timelineValues) && config.timelineValues.every((value) => Math.abs(Number(value) - previousNumber) <= tolerance)) {
+        config.timelineValues = config.timelineValues.map(() => nextValue);
+      }
       syncAutomationControlViews(layer, key, config, control);
     }
   }
@@ -1251,6 +2055,7 @@ export function createVideoWorkspace({
         layer.params[key] = Number(slider.value);
         syncInlineControlViews(layer, key, layer.params[key], control, slider);
         syncDormantAutomationWithBaseValue(layer, key, control, previousValue, layer.params[key]);
+        renderTimelineTracks();
         requestPreviewRefresh();
       });
     });
@@ -1264,7 +2069,16 @@ export function createVideoWorkspace({
         layer.params[key] = toggle.checked;
         syncInlineControlViews(layer, key, toggle.checked, control, toggle);
         syncDormantAutomationWithBaseValue(layer, key, control, previousValue, toggle.checked);
+        renderTimelineTracks();
         requestPreviewRefresh();
+      });
+    });
+
+    container.querySelectorAll('[data-action="toggle-automation"]').forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        layer.automationOpen = !layer.automationOpen;
+        renderInspector();
       });
     });
 
@@ -1278,8 +2092,13 @@ export function createVideoWorkspace({
         }
         const config = layer.automations[key] || cloneAutomationConfig(control, null, layer.params[key]);
         config.enabled = toggle.checked;
+        if (toggle.checked && control.kind !== "toggle") {
+          config.timelineValues = normalizeLayerControlAutomationValues(layer, control);
+        }
         layer.automations[key] = config;
         syncAutomationControlViews(layer, key, config, control, toggle);
+        renderLayerList();
+        syncLayerSelection();
         requestPreviewRefresh();
       });
     });
@@ -1294,13 +2113,25 @@ export function createVideoWorkspace({
         }
         const config = layer.automations[key] || cloneAutomationConfig(control, null, layer.params[key]);
         const nextValue = sanitizeAutomationEndpoint(control, input.value, layer.params[key]);
-        if (input.dataset.automationStart) {
-          config.start = nextValue;
+        if (control.kind === "toggle") {
+          if (input.dataset.automationStart) {
+            config.start = nextValue;
+          } else {
+            config.end = nextValue;
+          }
         } else {
-          config.end = nextValue;
+          const values = normalizeLayerControlAutomationValues(layer, control);
+          if (input.dataset.automationStart) {
+            values[0] = clampControlValue(control, nextValue);
+          } else if (values.length) {
+            values[values.length - 1] = clampControlValue(control, nextValue);
+          }
+          config.timelineValues = values;
+          syncAutomationBoundariesFromValues(control, config, values, layer.params[key]);
         }
         layer.automations[key] = config;
         syncAutomationControlViews(layer, key, config, control, input);
+        renderTimelineTracks();
         requestPreviewRefresh();
       });
     });
@@ -1317,9 +2148,368 @@ export function createVideoWorkspace({
         config.curve = sanitizeAutomationCurve(select.value);
         layer.automations[key] = config;
         syncAutomationControlViews(layer, key, config, control, select);
+        renderTimelineTracks();
         requestPreviewRefresh();
       });
     });
+  }
+
+  function setMediaTime(nextTime) {
+    if (!sourceVideo.src || !sourceVideo.duration) {
+      return;
+    }
+
+    sourceVideo.currentTime = clamp(nextTime, 0, sourceVideo.duration);
+    updateTimelinePlayhead();
+    requestPreviewRefresh();
+  }
+
+  function renderTimelineRuler(duration) {
+    if (!timelineRuler) {
+      return;
+    }
+
+    if (!layers.length) {
+      timelineRuler.innerHTML = "";
+      return;
+    }
+
+    const tickCount = Math.max(4, Math.min(12, Math.ceil(duration)));
+    const ticks = [];
+    for (let index = 0; index <= tickCount; index += 1) {
+      const progress = tickCount === 0 ? 0 : index / tickCount;
+      ticks.push(`
+        <div class="timeline-ruler-tick" style="left: ${progress * 100}%"></div>
+        <span class="timeline-ruler-label" style="left: ${progress * 100}%">${formatTime(duration * progress)}</span>
+      `);
+    }
+    timelineRuler.innerHTML = ticks.join("");
+  }
+
+  function snapTimelineTime(value, duration = getMediaDuration()) {
+    if (!timelineSnapEnabled) {
+      return clamp(value, 0, duration);
+    }
+    const snapped = Math.round(value / TIMELINE_SNAP_INTERVAL) * TIMELINE_SNAP_INTERVAL;
+    return clamp(Number(snapped.toFixed(3)), 0, duration);
+  }
+
+  function applyLayerTiming(layer, proposedStart, proposedEnd, duration = getMediaDuration()) {
+    if (!layer || layer.type === "video") {
+      return false;
+    }
+
+    const originalStart = Number.isFinite(layer.start) ? layer.start : 0;
+    const originalEnd = Number.isFinite(layer.end) ? layer.end : duration;
+    const maxStart = Math.max(0, duration - MIN_LAYER_DURATION);
+    let nextStart = clamp(proposedStart, 0, maxStart);
+    let nextEnd = clamp(proposedEnd, Math.min(duration, nextStart + MIN_LAYER_DURATION), duration);
+
+    if (nextEnd - nextStart < MIN_LAYER_DURATION) {
+      if (proposedEnd >= originalEnd) {
+        nextEnd = clamp(nextStart + MIN_LAYER_DURATION, MIN_LAYER_DURATION, duration);
+      } else {
+        nextStart = clamp(nextEnd - MIN_LAYER_DURATION, 0, maxStart);
+      }
+    }
+
+    if (Math.abs(nextStart - originalStart) < 0.0001 && Math.abs(nextEnd - originalEnd) < 0.0001) {
+      return false;
+    }
+
+    layer.start = Number(nextStart.toFixed(3));
+    layer.end = Number(nextEnd.toFixed(3));
+    normalizeLayerOpacityAutomation(layer, duration);
+    return true;
+  }
+
+  function updateLayerTimingFromDrag(layer, mode, deltaSeconds, duration, initialStart = layer?.start, initialEnd = layer?.end) {
+    if (!layer || layer.type === "video") {
+      return false;
+    }
+
+    const originalStart = Number.isFinite(initialStart) ? initialStart : 0;
+    const originalEnd = Number.isFinite(initialEnd) ? initialEnd : duration;
+    const clipLength = Math.max(MIN_LAYER_DURATION, originalEnd - originalStart);
+    let nextStart = originalStart;
+    let nextEnd = originalEnd;
+
+    if (mode === "move") {
+      nextStart = originalStart + deltaSeconds;
+      if (timelineSnapEnabled) {
+        nextStart = snapTimelineTime(nextStart, duration);
+      }
+      nextStart = clamp(nextStart, 0, Math.max(0, duration - clipLength));
+      nextEnd = nextStart + clipLength;
+    } else if (mode === "trim-start") {
+      nextStart = originalStart + deltaSeconds;
+      if (timelineSnapEnabled) {
+        nextStart = snapTimelineTime(nextStart, duration);
+      }
+      nextStart = clamp(nextStart, 0, Math.max(0, originalEnd - MIN_LAYER_DURATION));
+    } else if (mode === "trim-end") {
+      nextEnd = originalEnd + deltaSeconds;
+      if (timelineSnapEnabled) {
+        nextEnd = snapTimelineTime(nextEnd, duration);
+      }
+      nextEnd = clamp(nextEnd, Math.min(duration, originalStart + MIN_LAYER_DURATION), duration);
+    }
+
+    return applyLayerTiming(layer, nextStart, nextEnd, duration);
+  }
+
+  function clearTimelineReorderDecorations() {
+    if (!timelineTrackList) {
+      return;
+    }
+    timelineTrackList.querySelectorAll(".timeline-track.is-drop-before, .timeline-track.is-drop-after, .timeline-track.is-reordering")
+      .forEach((track) => {
+        track.classList.remove("is-drop-before", "is-drop-after", "is-reordering");
+      });
+  }
+
+  function reorderLayerFromTimeline(sourceLayerId, targetLayerId, insertBefore = false) {
+    const baseLayer = layers.find((layer) => layer.type === "video") || null;
+    const effectTracks = layers.filter((layer) => layer.type !== "video").reverse();
+    const sourceIndex = effectTracks.findIndex((layer) => layer.id === sourceLayerId);
+    if (sourceIndex < 0) {
+      return;
+    }
+
+    const [moving] = effectTracks.splice(sourceIndex, 1);
+    let insertIndex = effectTracks.length;
+
+    if (targetLayerId && targetLayerId !== baseLayer?.id) {
+      const targetIndex = effectTracks.findIndex((layer) => layer.id === targetLayerId);
+      if (targetIndex >= 0) {
+        insertIndex = insertBefore ? targetIndex : targetIndex + 1;
+      }
+    }
+
+    effectTracks.splice(clamp(insertIndex, 0, effectTracks.length), 0, moving);
+    layers = [baseLayer, ...effectTracks.reverse()].filter(Boolean);
+    selectedLayerId = moving.id;
+    renderLayerList();
+    syncLayerSelection();
+    requestPreviewRefresh();
+  }
+
+  function handleTimelineReorderDragStart(event, layer) {
+    if (!layer || layer.type === "video") {
+      event.preventDefault();
+      return;
+    }
+
+    timelineReorderState = { layerId: layer.id };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(layer.id));
+    event.currentTarget.closest(".timeline-track")?.classList.add("is-reordering");
+  }
+
+  function handleTimelineReorderDragOver(event, layer) {
+    if (!timelineReorderState || !layer || timelineReorderState.layerId === layer.id) {
+      return;
+    }
+
+    event.preventDefault();
+    clearTimelineReorderDecorations();
+    const track = event.currentTarget.closest(".timeline-track");
+    if (!track) {
+      return;
+    }
+    const rect = track.getBoundingClientRect();
+    const insertBefore = layer.type === "video" ? true : event.clientY < rect.top + rect.height * 0.5;
+    track.classList.add(insertBefore ? "is-drop-before" : "is-drop-after");
+  }
+
+  function handleTimelineReorderDrop(event, layer) {
+    if (!timelineReorderState || !layer) {
+      return;
+    }
+
+    event.preventDefault();
+    const track = event.currentTarget.closest(".timeline-track");
+    const rect = track?.getBoundingClientRect();
+    const insertBefore = layer.type === "video" || !rect ? true : event.clientY < rect.top + rect.height * 0.5;
+    const sourceLayerId = timelineReorderState.layerId;
+    clearTimelineReorderDecorations();
+    timelineReorderState = null;
+    reorderLayerFromTimeline(sourceLayerId, layer.id, insertBefore);
+  }
+
+  function handleTimelineReorderEnd() {
+    timelineReorderState = null;
+    clearTimelineReorderDecorations();
+  }
+
+  function stopTimelineAutomationDrag() {
+    if (!timelineAutomationDragState) {
+      return;
+    }
+
+    window.removeEventListener("pointermove", handleTimelineAutomationPointerMove);
+    window.removeEventListener("pointerup", handleTimelineAutomationPointerUp);
+    window.removeEventListener("pointercancel", handleTimelineAutomationPointerUp);
+    timelineAutomationDragState = null;
+  }
+
+  function handleTimelineAutomationPointerMove(event) {
+    if (!timelineAutomationDragState) {
+      return;
+    }
+
+    const {
+      layerId,
+      controlKey,
+      pointIndex,
+      shellTop,
+      shellHeight,
+    } = timelineAutomationDragState;
+    const layer = getLayerById(layerId);
+    const definition = effectMap.get(layer?.type);
+    const control = getTimelineAutomationControl(definition, controlKey);
+    if (!layer || !control || shellHeight <= 0) {
+      return;
+    }
+
+    const nextRatio = clamp(1 - ((event.clientY - shellTop) / shellHeight), 0, 1);
+    const nextValue = control.min + ((control.max - control.min) * nextRatio);
+    if (setLayerControlAutomationValue(layer, control, pointIndex, nextValue)) {
+      renderTimelineTracks();
+      requestPreviewRefresh();
+    }
+  }
+
+  function handleTimelineAutomationPointerUp() {
+    if (!timelineAutomationDragState) {
+      return;
+    }
+
+    stopTimelineAutomationDrag();
+    renderLayerList();
+    syncLayerSelection();
+  }
+
+  function beginTimelineAutomationDrag(event, layer, pointIndex, shell) {
+    if (!layer || layer.type === "video" || !shell) {
+      return;
+    }
+
+    const definition = effectMap.get(layer.type);
+    const control = getLayerTimelineAutomationControl(layer, definition);
+    if (!control) {
+      return;
+    }
+
+    stopTimelineDrag(false);
+    event.preventDefault();
+    event.stopPropagation();
+    const shellRect = shell.getBoundingClientRect();
+    const shellInset = 8;
+
+    if (selectedLayerId !== layer.id) {
+      selectedLayerId = layer.id;
+      renderLayerList();
+      syncLayerSelection();
+    }
+
+    timelineAutomationDragState = {
+      layerId: layer.id,
+      controlKey: control.key,
+      pointIndex,
+      shellTop: shellRect.top + shellInset,
+      shellHeight: Math.max(1, shellRect.height - (shellInset * 2)),
+    };
+
+    window.addEventListener("pointermove", handleTimelineAutomationPointerMove);
+    window.addEventListener("pointerup", handleTimelineAutomationPointerUp);
+    window.addEventListener("pointercancel", handleTimelineAutomationPointerUp);
+    handleTimelineAutomationPointerMove(event);
+  }
+
+  function stopTimelineDrag(commitSelection = true) {
+    if (!timelineDragState) {
+      return;
+    }
+
+    window.removeEventListener("pointermove", handleTimelinePointerMove);
+    window.removeEventListener("pointerup", handleTimelinePointerUp);
+    window.removeEventListener("pointercancel", handleTimelinePointerUp);
+
+    if (commitSelection && timelineDragState.layerId !== selectedLayerId) {
+      selectedLayerId = timelineDragState.layerId;
+      renderLayerList();
+      syncLayerSelection();
+      timelineDragState = null;
+      return;
+    }
+
+    timelineDragState = null;
+  }
+
+  function handleTimelinePointerMove(event) {
+    if (!timelineDragState) {
+      return;
+    }
+
+    const {
+      layerId,
+      mode,
+      originX,
+      laneWidth,
+      duration,
+      initialStart,
+      initialEnd,
+    } = timelineDragState;
+    const layer = getLayerById(layerId);
+    if (!layer || laneWidth <= 0) {
+      return;
+    }
+
+    const deltaSeconds = ((event.clientX - originX) / laneWidth) * duration;
+    if (updateLayerTimingFromDrag(layer, mode, deltaSeconds, duration, initialStart, initialEnd)) {
+      renderTimelineTracks();
+      requestPreviewRefresh();
+    }
+  }
+
+  function handleTimelinePointerUp() {
+    if (!timelineDragState) {
+      return;
+    }
+    stopTimelineDrag(false);
+    renderLayerList();
+    syncLayerSelection();
+  }
+
+  function beginTimelineDrag(event, layer, mode, lane) {
+    if (!layer || layer.type === "video" || !lane) {
+      return;
+    }
+
+    stopTimelineAutomationDrag();
+    event.preventDefault();
+    event.stopPropagation();
+    const laneRect = lane.getBoundingClientRect();
+
+    if (selectedLayerId !== layer.id) {
+      selectedLayerId = layer.id;
+      renderLayerList();
+      syncLayerSelection();
+    }
+    timelineDragState = {
+      layerId: layer.id,
+      mode,
+      originX: event.clientX,
+      laneWidth: laneRect.width,
+      duration: getMediaDuration(),
+      initialStart: Number.isFinite(layer.start) ? layer.start : 0,
+      initialEnd: Number.isFinite(layer.end) ? layer.end : getMediaDuration(),
+    };
+
+    window.addEventListener("pointermove", handleTimelinePointerMove);
+    window.addEventListener("pointerup", handleTimelinePointerUp);
+    window.addEventListener("pointercancel", handleTimelinePointerUp);
   }
 
   function renderTimelineTracks() {
@@ -1328,22 +2518,128 @@ export function createVideoWorkspace({
     }
 
     const duration = getMediaDuration();
+    renderTimelineRuler(duration);
     timelineTrackList.innerHTML = "";
+
+    if (!layers.length) {
+      timelineTrackList.innerHTML = '<div class="timeline-empty">Upload a video to build a layered timeline.</div>';
+      return;
+    }
+
     [...layers].reverse().forEach((layer) => {
+      const definition = effectMap.get(layer.type);
+      const { start, end, clipDuration } = getLayerWindow(layer, duration);
+      const clipLeftPercent = duration > 0 ? (start / duration) * 100 : 0;
+      const clipWidthPercent = duration > 0 ? Math.max((clipDuration / duration) * 100, 0.6) : 100;
+      const accent = getLayerAccent(layer);
+      const isSelected = layer.id === selectedLayerId;
+      const timelineAutomationControls = layer.type === "video" ? [] : getTimelineAutomationControls(definition);
+      const timelineAutomationControl = layer.type === "video" ? null : getLayerTimelineAutomationControl(layer, definition);
+      const timelineAutomationConfig = timelineAutomationControl
+        ? (layer.automations?.[timelineAutomationControl.key] || cloneAutomationConfig(
+          timelineAutomationControl,
+          null,
+          layer.params?.[timelineAutomationControl.key],
+        ))
+        : null;
+      const automationOffsets = timelineAutomationControl ? getLayerAutomationOffsets(layer, duration) : [];
+      const automationValues = timelineAutomationControl
+        ? normalizeLayerControlAutomationValues(layer, timelineAutomationControl, duration)
+        : [];
+      const automationColor = timelineAutomationControl
+        ? getTimelineAutomationColor(definition, timelineAutomationControl.key)
+        : "#ffd648";
+      const automationPolyline = buildAutomationPolyline(
+        automationOffsets,
+        automationValues,
+        timelineAutomationControl,
+        clipDuration,
+        timelineAutomationConfig?.curve || "linear",
+      );
+      const automationMarkup = !isSelected || !timelineAutomationControl
+        ? ""
+        : `
+          <div
+            class="timeline-automation-shell"
+            style="left: ${clipLeftPercent}%; width: ${clipWidthPercent}%; --automation-color: ${automationColor};"
+          >
+            <div class="timeline-automation-rail"></div>
+            <svg class="timeline-automation-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polyline points="${automationPolyline}" />
+            </svg>
+            ${automationOffsets.map((offset, index) => {
+              const x = clipDuration <= 0 ? 0 : (offset / clipDuration) * 100;
+              const y = (1 - getAutomationDisplayRatio(timelineAutomationControl, automationValues[index] ?? timelineAutomationControl.min)) * 100;
+              return `
+                <button
+                  class="timeline-automation-point"
+                  data-automation-point="${index}"
+                  type="button"
+                  aria-label="${timelineAutomationControl.label} automation point at ${formatTimePrecise(start + offset)}"
+                  style="left: ${x}%; top: ${y}%;"
+                ></button>
+              `;
+            }).join("")}
+          </div>
+        `;
       const track = document.createElement("div");
-      track.className = "timeline-track";
+      track.className = `timeline-track${layer.id === selectedLayerId ? " selected" : ""}${layer.visible ? "" : " is-hidden"}`;
       track.dataset.layerId = String(layer.id);
+      track.style.setProperty("--layer-accent", accent);
       track.innerHTML = `
-        <div class="timeline-track-meta">
-          <span>${layer.name}</span>
-          <span>${formatTime(layer.start || 0)} - ${formatTime(layer.end || duration)}</span>
+        <div class="timeline-track-meta" draggable="${layer.type !== "video"}">
+          <div class="timeline-track-header">
+            <span class="timeline-track-order">${layer.type === "video" ? "V1" : getLayerTrackLabel(layer)}</span>
+            <div class="timeline-track-tools">
+              ${layer.type === "video" ? "" : '<span class="timeline-track-drag">Reorder</span>'}
+            </div>
+          </div>
+          <div class="timeline-track-id">
+            <span class="timeline-track-name">${layer.name}</span>
+            <span class="timeline-track-kind">${buildLayerTypeLabel(layer.type)}</span>
+          </div>
+          <div class="timeline-track-state">
+            <span class="timeline-state-pill">${layer.visible ? "Visible" : "Muted"}</span>
+            <span class="timeline-state-pill">${formatPercentage(layer.opacity)}</span>
+            ${timelineAutomationControl ? `<span class="timeline-state-pill">${timelineAutomationControl.label}</span>` : ""}
+            ${timelineAutomationControl ? `<span class="timeline-state-pill">${automationValues.length} pts</span>` : ""}
+          </div>
+          ${timelineAutomationControl ? `
+            <label class="timeline-automation-picker" style="--automation-color: ${automationColor};">
+              <span class="timeline-automation-swatch"></span>
+              <select data-automation-target="${layer.id}" aria-label="${layer.name} automation parameter">
+                ${timelineAutomationControls.map((control) => `
+                  <option value="${control.key}" ${control.key === timelineAutomationControl.key ? "selected" : ""}>${control.label}</option>
+                `).join("")}
+              </select>
+            </label>
+          ` : ""}
+          <span class="timeline-track-window">${formatTime(start)} - ${formatTime(end)}</span>
         </div>
-        <div class="timeline-track-bar">
-          <div class="timeline-track-fill" style="width: ${Math.max(0, Math.min(100, ((Math.max(0, layer.end || duration) - (layer.start || 0)) / duration) * 100))}%"></div>
-        </div>
-        <div class="timeline-track-range">
-          <label><span>Start</span><input data-track-start="${layer.id}" type="number" min="0" max="${duration}" step="0.05" value="${layer.start ?? 0}" /></label>
-          <label><span>End</span><input data-track-end="${layer.id}" type="number" min="0" max="${duration}" step="0.05" value="${layer.end ?? duration}" /></label>
+        <div class="timeline-lane" data-timeline-seek="${layer.id}">
+          <div
+            class="timeline-clip${layer.type === "video" ? " is-video" : ""}"
+            style="--layer-accent: ${accent}; left: ${clipLeftPercent}%; width: ${clipWidthPercent}%;"
+          >
+            ${layer.type === "video" ? "" : '<button class="timeline-trim-handle" data-timeline-drag="trim-start" type="button" aria-label="Trim layer start"></button>'}
+            <div class="timeline-clip-body" data-timeline-drag="move">
+              <span class="timeline-clip-grip" aria-hidden="true"></span>
+              <div class="timeline-clip-copy">
+                <span class="timeline-clip-label">${layer.name}</span>
+                <span class="timeline-clip-subtitle">${buildLayerTypeLabel(layer.type)} • ${formatTimePrecise(clipDuration)}</span>
+              </div>
+              <div class="timeline-clip-tags">
+                ${layer.type === "video"
+                  ? '<span class="timeline-clip-tag">Source</span>'
+                  : `<span class="timeline-clip-tag">${BLEND_MODE_OPTIONS.find((option) => option.value === layer.blend)?.label || "Normal"}</span>`}
+                ${isSelected && timelineAutomationControl
+                  ? `<span class="timeline-clip-tag">Auto: ${timelineAutomationControl.label}</span>`
+                  : ""}
+              </div>
+            </div>
+            ${layer.type === "video" ? "" : '<button class="timeline-trim-handle" data-timeline-drag="trim-end" type="button" aria-label="Trim layer end"></button>'}
+          </div>
+          ${automationMarkup}
         </div>
       `;
       timelineTrackList.append(track);
@@ -1353,26 +2649,66 @@ export function createVideoWorkspace({
         renderLayerList();
         syncLayerSelection();
       });
-    });
 
-    timelineTrackList.querySelectorAll("[data-track-start], [data-track-end]").forEach((input) => {
-      input.addEventListener("change", (event) => {
-        const target = event.target;
-        const layerId = Number(target.dataset.trackStart || target.dataset.trackEnd);
-        const layer = getLayerById(layerId);
-        if (!layer) {
+      const lane = track.querySelector(".timeline-lane");
+      const trackMeta = track.querySelector(".timeline-track-meta");
+      const clipBody = track.querySelector('[data-timeline-drag="move"]');
+      const trimStart = track.querySelector('[data-timeline-drag="trim-start"]');
+      const trimEnd = track.querySelector('[data-timeline-drag="trim-end"]');
+      const automationTarget = track.querySelector("[data-automation-target]");
+
+      lane?.addEventListener("click", (event) => {
+        if (
+          event.target.closest("[data-timeline-drag]")
+          || event.target.closest("[data-automation-point]")
+          || event.target.closest(".timeline-automation-shell")
+        ) {
           return;
         }
+        const rect = lane.getBoundingClientRect();
+        const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+        setMediaTime(progress * duration);
+      });
 
-        const value = clamp(Number(target.value), 0, duration);
-        if (target.dataset.trackStart) {
-          layer.start = Math.min(value, layer.end ?? duration);
-        } else {
-          layer.end = Math.max(value, layer.start ?? 0);
-        }
+      clipBody?.addEventListener("pointerdown", (event) => {
+        beginTimelineDrag(event, layer, "move", lane);
+      });
+      trimStart?.addEventListener("pointerdown", (event) => {
+        beginTimelineDrag(event, layer, "trim-start", lane);
+      });
+      trimEnd?.addEventListener("pointerdown", (event) => {
+        beginTimelineDrag(event, layer, "trim-end", lane);
+      });
+      track.querySelectorAll("[data-automation-point]").forEach((point) => {
+        point.addEventListener("pointerdown", (event) => {
+          const shell = track.querySelector(".timeline-automation-shell");
+          beginTimelineAutomationDrag(event, layer, Number(point.dataset.automationPoint), shell);
+        });
+      });
+      automationTarget?.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      automationTarget?.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      automationTarget?.addEventListener("change", () => {
+        layer.timelineAutomationKey = automationTarget.value;
+        selectedLayerId = layer.id;
+        renderLayerList();
+        syncLayerSelection();
+      });
 
-        requestPreviewRefresh();
-        renderTimelineTracks();
+      trackMeta?.addEventListener("dragstart", (event) => {
+        handleTimelineReorderDragStart(event, layer);
+      });
+      trackMeta?.addEventListener("dragover", (event) => {
+        handleTimelineReorderDragOver(event, layer);
+      });
+      trackMeta?.addEventListener("drop", (event) => {
+        handleTimelineReorderDrop(event, layer);
+      });
+      trackMeta?.addEventListener("dragend", () => {
+        handleTimelineReorderEnd();
       });
     });
   }
@@ -1393,8 +2729,11 @@ export function createVideoWorkspace({
 
     [...layers].reverse().forEach((layer) => {
       const actualIndex = layers.findIndex((entry) => entry.id === layer.id);
-      const inlineControls = buildInlineControls(layer);
       const definition = effectMap.get(layer.type);
+      const duration = getMediaDuration();
+      const { start, end } = getLayerWindow(layer, duration);
+      const automationCount = countEnabledAutomations(layer);
+      const activeLabels = getActiveAutomationLabels(layer, definition, 2);
       const row = document.createElement("div");
       row.className = `layer-row-card${layer.id === selectedLayerId ? " selected" : ""}`;
       row.dataset.layerId = String(layer.id);
@@ -1409,7 +2748,6 @@ export function createVideoWorkspace({
             <div class="layer-type">${buildLayerTypeLabel(layer.type)}</div>
           </div>
           <div class="layer-actions">
-            <button class="mini-button" data-action="toggle-controls" type="button">${layer.controlsOpen ? "▾" : "▸"}</button>
             <button class="mini-button ${layer.visible ? "active" : ""}" data-action="toggle-visibility" type="button">${layer.visible ? "Eye" : "Off"}</button>
             <button class="mini-button" data-action="move-up" type="button">↑</button>
             <button class="mini-button" data-action="move-down" type="button">↓</button>
@@ -1417,22 +2755,14 @@ export function createVideoWorkspace({
             <button class="mini-button" data-action="delete" type="button">Del</button>
           </div>
         </div>
-        <div class="layer-grid">
-          <div class="layer-field">
-            <label>Blend</label>
-            <select data-action="blend">
-              ${BLEND_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${option.value === layer.blend ? "selected" : ""}>${option.label}</option>`).join("")}
-            </select>
-          </div>
-          <div class="layer-field">
-            <label>Opacity</label>
-            <div class="layer-opacity">
-              <input data-action="opacity" type="range" min="0" max="1" step="0.01" value="${layer.opacity.toFixed(2)}" />
-              <output data-action-output="opacity">${Math.round(layer.opacity * 100)}%</output>
-            </div>
-          </div>
+        <div class="layer-chip-row">
+          <span class="layer-chip is-strong">${getLayerTrackLabel(layer)}</span>
+          <span class="layer-chip">${formatTime(start)} - ${formatTime(end)}</span>
+          <span class="layer-chip">${formatPercentage(layer.opacity)}</span>
+          ${layer.type === "video" ? '<span class="layer-chip">Source</span>' : `<span class="layer-chip">${BLEND_MODE_OPTIONS.find((option) => option.value === layer.blend)?.label || "Normal"}</span>`}
+          ${automationCount ? `<span class="layer-chip">${automationCount} automation${automationCount === 1 ? "" : "s"}</span>` : ""}
+          ${activeLabels.map((label) => `<span class="layer-chip">${label}</span>`).join("")}
         </div>
-        ${layer.controlsOpen && inlineControls ? `<div class="layer-inline-panel" data-control-layer="${layer.id}">${inlineControls}</div>` : ""}
       `;
 
       row.addEventListener("click", () => {
@@ -1441,26 +2771,7 @@ export function createVideoWorkspace({
         syncLayerSelection();
       });
 
-      const blendSelect = row.querySelector('select[data-action="blend"]');
-      const opacityInput = row.querySelector('input[data-action="opacity"]');
-      const opacityOutput = row.querySelector('[data-action-output="opacity"]');
-      blendSelect?.addEventListener("click", (event) => event.stopPropagation());
-      blendSelect?.addEventListener("change", (event) => {
-        layer.blend = event.target.value;
-        requestPreviewRefresh();
-      });
-      opacityInput?.addEventListener("click", (event) => event.stopPropagation());
-      opacityInput?.addEventListener("input", (event) => {
-        layer.opacity = Number(event.target.value);
-        opacityOutput.textContent = `${Math.round(layer.opacity * 100)}%`;
-        requestPreviewRefresh();
-      });
-
       row.querySelectorAll("[data-action]").forEach((button) => {
-        if (button === blendSelect || button === opacityInput) {
-          return;
-        }
-
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           const { action } = button.dataset;
@@ -1468,16 +2779,6 @@ export function createVideoWorkspace({
             layer.visible = !layer.visible;
             renderLayerList();
             requestPreviewRefresh();
-            return;
-          }
-          if (action === "toggle-controls") {
-            layer.controlsOpen = !layer.controlsOpen;
-            renderLayerList();
-            return;
-          }
-          if (action === "toggle-automation") {
-            layer.automationOpen = !layer.automationOpen;
-            renderLayerList();
             return;
           }
           if (action === "move-up") {
@@ -1498,11 +2799,8 @@ export function createVideoWorkspace({
         });
       });
 
-      bindInlineControls(row, layer);
-
       row.querySelector('[data-action="duplicate"]').disabled = layer.type === "video";
       row.querySelector('[data-action="delete"]').disabled = layer.type === "video";
-      row.querySelector('[data-action="toggle-controls"]').disabled = layer.type === "video" || !inlineControls;
       row.querySelector('[data-action="move-up"]').disabled = layer.type === "video" || actualIndex === layers.length - 1;
       row.querySelector('[data-action="move-down"]').disabled = layer.type === "video" || actualIndex <= 1;
 
@@ -1545,6 +2843,7 @@ export function createVideoWorkspace({
       name: `${buildLayerTypeLabel(original.type)} Copy`,
       params: cloneParams(original.params),
       automations: cloneAutomations(effectMap.get(original.type), original.params, original.automations),
+      opacityAutomationValues: Array.isArray(original.opacityAutomationValues) ? [...original.opacityAutomationValues] : [1, 1],
       runtime: createLayerRuntime(width, height, sharedLayerFrameRuntime),
     };
     const index = layers.findIndex((layer) => layer.id === layerId);
@@ -1589,16 +2888,21 @@ export function createVideoWorkspace({
     layers.splice(index, 1);
     layers.splice(targetIndex, 0, moving);
     renderLayerList();
+    syncLayerSelection();
     requestPreviewRefresh();
   }
 
   function resetLayers() {
+    stopTimelineDrag(false);
+    stopTimelineAutomationDrag();
     layers.forEach(disposeLayerRuntime);
     layers = [];
     selectedLayerId = null;
   }
 
   function resetEffects() {
+    stopTimelineDrag(false);
+    stopTimelineAutomationDrag();
     const baseLayer = layers.find((layer) => layer.type === "video") || null;
     layers.forEach((layer) => {
       if (layer !== baseLayer) {
@@ -1613,6 +2917,8 @@ export function createVideoWorkspace({
   }
 
   function replaceEffectLayers(effectLayers) {
+    stopTimelineDrag(false);
+    stopTimelineAutomationDrag();
     const baseLayer = ensureBaseLayer();
     layers.forEach((layer) => {
       if (layer !== baseLayer) {
@@ -1696,6 +3002,10 @@ export function createVideoWorkspace({
           opacity: Number(layer.opacity.toFixed(2)),
           controlsOpen: layer.controlsOpen,
           automationOpen: layer.automationOpen === true,
+          timelineAutomationKey: typeof layer.timelineAutomationKey === "string" ? layer.timelineAutomationKey : null,
+          start: Number((layer.start ?? 0).toFixed(3)),
+          end: Number((layer.end ?? getMediaDuration()).toFixed(3)),
+          opacityAutomationValues: Array.isArray(layer.opacityAutomationValues) ? [...layer.opacityAutomationValues] : [1, 1],
           params: cloneParams(layer.params),
           automations: cloneAutomations(effectMap.get(layer.type), layer.params, layer.automations),
         })),
@@ -1744,6 +3054,19 @@ export function createVideoWorkspace({
       layer.opacity = sanitizeLayerOpacity(entry.opacity);
       layer.controlsOpen = entry.controlsOpen !== false;
       layer.automationOpen = entry.automationOpen === true;
+      layer.timelineAutomationKey = typeof entry.timelineAutomationKey === "string"
+        ? entry.timelineAutomationKey
+        : getDefaultTimelineAutomationKey(definition);
+      applyLayerTiming(
+        layer,
+        Number.isFinite(Number(entry.start)) ? Number(entry.start) : layer.start,
+        Number.isFinite(Number(entry.end)) ? Number(entry.end) : layer.end,
+        getMediaDuration(),
+      );
+      layer.opacityAutomationValues = Array.isArray(entry.opacityAutomationValues)
+        ? entry.opacityAutomationValues.map((value) => clamp(Number(value), 0, 1))
+        : layer.opacityAutomationValues;
+      normalizeLayerOpacityAutomation(layer, getMediaDuration());
 
       if (entry.params && typeof entry.params === "object") {
         definition.controls.forEach((control) => {
@@ -1768,6 +3091,7 @@ export function createVideoWorkspace({
         layer.params,
         entry.automations && typeof entry.automations === "object" ? entry.automations : null,
       );
+      ensureLayerTimelineAutomationKey(layer, definition);
 
       importedLayers.push(layer);
     });
@@ -1863,12 +3187,13 @@ export function createVideoWorkspace({
   }
 
   function compositeLayer(layer) {
-    if (!layer.visible || layer.opacity <= 0) {
+    const effectiveOpacity = layer.opacity * sampleLayerOpacityAutomation(layer);
+    if (!layer.visible || effectiveOpacity <= 0) {
       return;
     }
 
     compositeCtx.save();
-    compositeCtx.globalAlpha = layer.opacity;
+    compositeCtx.globalAlpha = effectiveOpacity;
     compositeCtx.globalCompositeOperation = BLEND_MODE_MAP[layer.blend] || "source-over";
     if (layer.blend === "subtract") {
       scratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
@@ -1943,6 +3268,7 @@ export function createVideoWorkspace({
     samplePlaybackFps(timestamp);
     updateFpsReadout();
     updateTimelinePlayhead();
+    syncLiveInspectorControlViews(getSelectedLayer());
 
     if (needsContinuousRender()) {
       renderHandle = requestAnimationFrame(renderFrame);
@@ -1989,6 +3315,14 @@ export function createVideoWorkspace({
     splitButton?.classList.toggle("active", splitScreenMode === SPLIT_SCREEN_MODES.side);
     splitStackButton?.classList.toggle("active", splitScreenMode === SPLIT_SCREEN_MODES.stack);
     updateDisplayModeReadout();
+  }
+
+  function updateTimelineSnapButton() {
+    if (!timelineSnapButton) {
+      return;
+    }
+    timelineSnapButton.classList.toggle("active", timelineSnapEnabled);
+    timelineSnapButton.textContent = timelineSnapEnabled ? "Snap 0.10s" : "Snap Off";
   }
 
   function setSplitScreenMode(mode) {
@@ -2301,11 +3635,14 @@ export function createVideoWorkspace({
   });
   playheadRange?.addEventListener("input", () => {
     const value = Number(playheadRange.value);
-    if (Number.isFinite(value) && sourceVideo.duration) {
-      sourceVideo.currentTime = clamp(value, 0, sourceVideo.duration);
-      updateTimelinePlayhead();
-      requestPreviewRefresh();
+    if (Number.isFinite(value)) {
+      setMediaTime(value);
     }
+  });
+  timelineRuler?.addEventListener("click", (event) => {
+    const rect = timelineRuler.getBoundingClientRect();
+    const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    setMediaTime(progress * getMediaDuration());
   });
   sourceVideo?.addEventListener("timeupdate", () => {
     updateTimelinePlayhead();
@@ -2351,14 +3688,26 @@ export function createVideoWorkspace({
   splitStackButton?.addEventListener("click", () => {
     setSplitScreenMode(SPLIT_SCREEN_MODES.stack);
   });
+  timelineSnapButton?.addEventListener("click", () => {
+    timelineSnapEnabled = !timelineSnapEnabled;
+    updateTimelineSnapButton();
+    renderTimelineTracks();
+    renderInspector();
+  });
   qualitySelect?.addEventListener("change", () => {
     applyPerformanceSettings();
   });
   fpsSelect?.addEventListener("change", () => {
     applyPerformanceSettings();
   });
+  inspectorTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      setActiveInspectorTab(tab.dataset.inspectorTab || "clip");
+    });
+  });
 
   collapsiblePanelHeads.forEach((head) => {
+    syncPanelToggle(head);
     head.addEventListener("click", () => {
       togglePanel(head);
     });
@@ -2370,6 +3719,8 @@ export function createVideoWorkspace({
   });
 
   window.addEventListener("beforeunload", () => {
+    stopTimelineDrag(false);
+    stopTimelineAutomationDrag();
     stopVideoFrameObserver();
     cleanupRecordingState();
     revokeActiveUrl();
@@ -2380,12 +3731,15 @@ export function createVideoWorkspace({
 
   updateQualityMeta();
   updateSplitButtons();
+  updateTimelineSnapButton();
   updateExportButton();
+  setActiveInspectorTab(activeInspectorTab);
   renderEffectRack();
   renderLayerList();
   syncLayerSelection();
   updateFpsReadout();
-  setStatus("Ready. Upload a video for motion playback and export.");
+  updateTimelinePlayhead();
+  setStatus("Ready. Upload a video to start building a layered motion edit.");
 
   return {
     addLayer,

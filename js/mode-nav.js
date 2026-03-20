@@ -1,22 +1,8 @@
 (function () {
   const TAB_CONFIG = [
-    { href: "./motionvideo.html", label: "Motion Editor", pixel: false, aliases: ["./index.html", "./"] },
-    { href: "./crtvideo.html", label: "CRT Video", pixel: false },
-    { href: "./data1.html", label: "Data1", pixel: true },
-    { href: "./blob-transition.html", label: "Blob", pixel: true },
+    { href: "./motionvideo.html", label: "Motion Editor", aliases: ["./index.html", "./"] },
+    { href: "./crtvideo.html", label: "CRT Video" },
   ];
-
-  function ensurePixelFont() {
-    if (document.getElementById("mode-nav-pixel-font")) {
-      return;
-    }
-
-    const fontLink = document.createElement("link");
-    fontLink.id = "mode-nav-pixel-font";
-    fontLink.rel = "stylesheet";
-    fontLink.href = "https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap";
-    document.head.append(fontLink);
-  }
 
   function injectStyles() {
     if (document.getElementById("mode-nav-style")) {
@@ -53,9 +39,10 @@
       }
 
       .site-home-logo span {
-        font-family: "Press Start 2P", "VT323", "Courier New", monospace;
+        font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
         font-size: 0.72rem;
         line-height: 1.2;
+        font-weight: 700;
       }
     `;
     document.head.append(style);
@@ -73,9 +60,6 @@
     const linkTarget = window.self !== window.top ? ' target="_top"' : "";
     nav.innerHTML = TAB_CONFIG.map((tab) => {
       const classes = ["mode-tab"];
-      if (tab.pixel) {
-        classes.push("pixel");
-      }
       if (tab.href === activeHref) {
         classes.push("active");
       }
@@ -111,7 +95,6 @@
     nav.dataset.dropdownReady = "true";
   }
 
-  ensurePixelFont();
   injectStyles();
   document.querySelectorAll("nav.mode-tabs").forEach(enhanceNav);
   ensureHomeLogo();

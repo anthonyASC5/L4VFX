@@ -2,7 +2,7 @@ import { renderMotionVideoEffectLayer, layerNeedsMotionSourceImageData, motionVi
 import { createVideoWorkspace } from "./video-workspace-base.js";
 
 createVideoWorkspace({
-  title: "MOTION VIDEO",
+  title: "Motion Editor",
   recordingFilename: "motionvideo-recording.webm",
   effectDefinitions: motionVideoEffectDefinitions,
   renderEffectLayer: renderMotionVideoEffectLayer,
