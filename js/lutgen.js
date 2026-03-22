@@ -3,7 +3,52 @@ const HISTOGRAM_BINS = 96;
 const HISTOGRAM_TARGET_SAMPLES = 120000;
 const SOURCE_ALPHA_THRESHOLD = 8;
 const WHEEL_CANVAS_SIZE = 168;
+const CURVE_CANVAS_WIDTH = 184;
+const CURVE_CANVAS_HEIGHT = 132;
+const CURVE_TABLE_SIZE = 256;
+const CURVE_HANDLE_COUNT = 2;
 const WHEEL_KEYS = ["lift", "gamma", "gain", "offset"];
+const CURVE_KEYS = ["luma", "red", "green", "blue"];
+const CONVERSION_LUT_DIRECTORY = "conversion-luts";
+const FILTER_LUT_DIRECTORY = "filters";
+
+const CURVE_META = Object.freeze({
+  luma: Object.freeze({ label: "Luminance", accent: "#ffffff" }),
+  red: Object.freeze({ label: "Red", accent: "#ff5757" }),
+  green: Object.freeze({ label: "Green", accent: "#53ff85" }),
+  blue: Object.freeze({ label: "Blue", accent: "#5b92ff" }),
+});
+
+const DEFAULT_WHEELS = Object.freeze({
+  lift: Object.freeze({ x: 0, y: 0 }),
+  gamma: Object.freeze({ x: 0, y: 0 }),
+  gain: Object.freeze({ x: 0, y: 0 }),
+  offset: Object.freeze({ x: 0, y: 0 }),
+});
+
+const DEFAULT_CURVE_POINTS = Object.freeze([
+  Object.freeze({ x: 0.25, y: 0.25 }),
+  Object.freeze({ x: 0.75, y: 0.75 }),
+]);
+
+const DEFAULT_CURVES = Object.freeze({
+  luma: Object.freeze({
+    intensity: 1,
+    points: DEFAULT_CURVE_POINTS,
+  }),
+  red: Object.freeze({
+    intensity: 1,
+    points: DEFAULT_CURVE_POINTS,
+  }),
+  green: Object.freeze({
+    intensity: 1,
+    points: DEFAULT_CURVE_POINTS,
+  }),
+  blue: Object.freeze({
+    intensity: 1,
+    points: DEFAULT_CURVE_POINTS,
+  }),
+});
 
 const previewCanvas = document.getElementById("preview-canvas");
 const previewCtx = previewCanvas.getContext("2d");
@@ -28,16 +73,24 @@ const previewModeText = document.getElementById("preview-mode-text");
 const renderMetricsText = document.getElementById("render-metrics");
 const statusText = document.getElementById("status-text");
 const histogramSummaryText = document.getElementById("histogram-summary");
+const histogramAvgText = document.getElementById("histogram-avg");
+const histogramMedianText = document.getElementById("histogram-median");
+const histogramRangeText = document.getElementById("histogram-range");
+const histogramSpreadText = document.getElementById("histogram-spread");
+const histogramZonesText = document.getElementById("histogram-zones");
+const histogramClipText = document.getElementById("histogram-clip");
 
 const moduleInputs = {
   primary: document.getElementById("module-primary"),
   balance: document.getElementById("module-balance"),
+  curves: document.getElementById("module-curves"),
   tone: document.getElementById("module-tone"),
 };
 
 const moduleCards = {
   primary: document.getElementById("module-primary-card"),
   balance: document.getElementById("module-balance-card"),
+  curves: document.getElementById("module-curves-card"),
   tone: document.getElementById("module-tone-card"),
 };
 
@@ -51,10 +104,10 @@ const liftInput = document.getElementById("lift");
 const gammaInput = document.getElementById("gamma");
 const gainInput = document.getElementById("gain");
 const offsetInput = document.getElementById("offset");
-const splitViewToggle = document.getElementById("split-view-toggle");
-const splitPositionInput = document.getElementById("split-position");
+const splitToggleButton = document.getElementById("split-toggle-button");
 const lutSizeSelect = document.getElementById("lut-size");
 const conversionLutSelect = document.getElementById("conversion-lut-select");
+const filterLutSelect = document.getElementById("filter-lut-select");
 
 const exposureOutput = document.getElementById("exposure-output");
 const contrastOutput = document.getElementById("contrast-output");
@@ -66,7 +119,6 @@ const liftOutput = document.getElementById("lift-output");
 const gammaOutput = document.getElementById("gamma-output");
 const gainOutput = document.getElementById("gain-output");
 const offsetOutput = document.getElementById("offset-output");
-const splitPositionOutput = document.getElementById("split-position-output");
 const lutSizeOutput = document.getElementById("lut-size-output");
 
 const wheelElements = {
@@ -92,10 +144,38 @@ const wheelElements = {
   },
 };
 
+const curveElements = {
+  luma: {
+    canvas: document.getElementById("curve-luma"),
+    intensity: document.getElementById("curve-luma-intensity"),
+    output: document.getElementById("curve-luma-intensity-output"),
+    reset: document.querySelector('[data-curve-reset="luma"]'),
+  },
+  red: {
+    canvas: document.getElementById("curve-red"),
+    intensity: document.getElementById("curve-red-intensity"),
+    output: document.getElementById("curve-red-intensity-output"),
+    reset: document.querySelector('[data-curve-reset="red"]'),
+  },
+  green: {
+    canvas: document.getElementById("curve-green"),
+    intensity: document.getElementById("curve-green-intensity"),
+    output: document.getElementById("curve-green-intensity-output"),
+    reset: document.querySelector('[data-curve-reset="green"]'),
+  },
+  blue: {
+    canvas: document.getElementById("curve-blue"),
+    intensity: document.getElementById("curve-blue-intensity"),
+    output: document.getElementById("curve-blue-intensity-output"),
+    reset: document.querySelector('[data-curve-reset="blue"]'),
+  },
+};
+
 const DEFAULT_SNAPSHOT = Object.freeze({
   modules: Object.freeze({
     primary: true,
     balance: true,
+    curves: true,
     tone: true,
   }),
   controls: Object.freeze({
@@ -111,17 +191,14 @@ const DEFAULT_SNAPSHOT = Object.freeze({
     offset: 0,
   }),
   view: Object.freeze({
-    splitView: true,
+    splitView: false,
     splitPosition: 0.5,
   }),
   lutSize: 32,
   conversionLut: "",
-  wheels: Object.freeze({
-    lift: Object.freeze({ x: 0, y: 0 }),
-    gamma: Object.freeze({ x: 0, y: 0 }),
-    gain: Object.freeze({ x: 0, y: 0 }),
-    offset: Object.freeze({ x: 0, y: 0 }),
-  }),
+  filterLut: "",
+  wheels: DEFAULT_WHEELS,
+  curves: DEFAULT_CURVES,
 });
 
 const SRGB_TO_LINEAR_LOOKUP = new Float32Array(256);
@@ -146,10 +223,15 @@ const state = {
   conversionScratch: new Float32Array(3),
   wheels: cloneWheelSnapshot(),
   wheelBaseCanvas: null,
+  curves: cloneCurveSnapshot(),
   activeConversionLutKey: "",
   activeConversionLut: null,
   conversionLutRequestId: 0,
   conversionLutCache: new Map(),
+  activeFilterLutKey: "",
+  activeFilterLut: null,
+  filterLutRequestId: 0,
+  filterLutCache: new Map(),
 };
 
 const CONVERSION_LUT_OPTIONS = Object.freeze([
@@ -230,7 +312,55 @@ const CONVERSION_LUT_OPTIONS = Object.freeze([
   },
 ]);
 
-function cloneWheelSnapshot(wheels = DEFAULT_SNAPSHOT.wheels) {
+const FILTER_LUT_OPTIONS = Object.freeze([
+  {
+    key: "cine-basic",
+    label: "Cine Basic",
+    file: "FG_CineBasic.cube",
+  },
+  {
+    key: "cine-bright",
+    label: "Cine Bright",
+    file: "FG_CineBright.cube",
+  },
+  {
+    key: "cine-cold",
+    label: "Cine Cold",
+    file: "FG_CineCold.cube",
+  },
+  {
+    key: "cine-drama",
+    label: "Cine Drama",
+    file: "FG_CineDrama.cube",
+  },
+  {
+    key: "cine-teal-orange-1",
+    label: "Cine Teal & Orange 1",
+    file: "FG_CineTeal&Orange1.cube",
+  },
+  {
+    key: "cine-teal-orange-2",
+    label: "Cine Teal & Orange 2",
+    file: "FG_CineTeal&Orange2.cube",
+  },
+  {
+    key: "cine-vibrant",
+    label: "Cine Vibrant",
+    file: "FG_CineVibrant.cube",
+  },
+  {
+    key: "cine-warm",
+    label: "Cine Warm",
+    file: "FG_CineWarm.cube",
+  },
+  {
+    key: "vintage",
+    label: "Vintage",
+    file: "01_Vintage_LUTs_Vintage.cube",
+  },
+]);
+
+function cloneWheelSnapshot(wheels = DEFAULT_WHEELS) {
   return {
     lift: { x: wheels.lift.x, y: wheels.lift.y },
     gamma: { x: wheels.gamma.x, y: wheels.gamma.y },
@@ -239,8 +369,37 @@ function cloneWheelSnapshot(wheels = DEFAULT_SNAPSHOT.wheels) {
   };
 }
 
+function cloneCurvePoints(points = DEFAULT_CURVE_POINTS) {
+  const sourcePoints = Array.isArray(points) ? points : DEFAULT_CURVE_POINTS;
+  return Array.from({ length: CURVE_HANDLE_COUNT }, (_, index) => {
+    const fallback = DEFAULT_CURVE_POINTS[index];
+    const point = sourcePoints[index] || fallback;
+    return {
+      x: point.x,
+      y: point.y,
+    };
+  });
+}
+
+function cloneCurveSnapshot(curves = DEFAULT_CURVES) {
+  const nextCurves = {};
+  CURVE_KEYS.forEach((key) => {
+    const fallback = DEFAULT_CURVES[key];
+    const curve = curves?.[key] || fallback;
+    nextCurves[key] = {
+      intensity: typeof curve.intensity === "number" ? curve.intensity : fallback.intensity,
+      points: cloneCurvePoints(curve.points || fallback.points),
+    };
+  });
+  return nextCurves;
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function clampUnit(value) {
+  return clamp(value, 0, 1);
 }
 
 function mix(a, b, amount) {
@@ -300,6 +459,95 @@ function formatSigned(value, digits = 2) {
   return value >= 0 ? `+${fixed}` : fixed;
 }
 
+function formatPercent(value, digits = 1) {
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function formatIre(value, digits = 1) {
+  return `${(clampUnit(value) * 100).toFixed(digits)} IRE`;
+}
+
+function percentileFromHistogram(values, percentile, total) {
+  if (!total) {
+    return 0;
+  }
+
+  const target = Math.max(1, total * percentile);
+  let running = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    running += values[index];
+    if (running >= target) {
+      return index / (values.length - 1);
+    }
+  }
+
+  return 1;
+}
+
+function computeHistogramDetails(histogram, samples) {
+  if (!samples) {
+    return {
+      sampleCount: 0,
+      average: 0,
+      median: 0,
+      minimum: 0,
+      maximum: 0,
+      p10: 0,
+      p90: 0,
+      shadowShare: 0,
+      midShare: 0,
+      highlightShare: 0,
+      clipBlackShare: 0,
+      clipWhiteShare: 0,
+      peak: 0,
+    };
+  }
+
+  let minimum = 0;
+  while (minimum < histogram.luma.length - 1 && histogram.luma[minimum] === 0) {
+    minimum += 1;
+  }
+
+  let maximum = histogram.luma.length - 1;
+  while (maximum > 0 && histogram.luma[maximum] === 0) {
+    maximum -= 1;
+  }
+
+  let peakIndex = 0;
+  let peakValue = 0;
+  histogram.luma.forEach((value, index) => {
+    if (value > peakValue) {
+      peakValue = value;
+      peakIndex = index;
+    }
+  });
+
+  return {
+    sampleCount: samples.sampleCount,
+    average: samples.lumaSum / samples.sampleCount,
+    median: percentileFromHistogram(histogram.luma, 0.5, samples.sampleCount),
+    minimum: minimum / (histogram.luma.length - 1),
+    maximum: maximum / (histogram.luma.length - 1),
+    p10: percentileFromHistogram(histogram.luma, 0.1, samples.sampleCount),
+    p90: percentileFromHistogram(histogram.luma, 0.9, samples.sampleCount),
+    shadowShare: samples.shadows / samples.sampleCount,
+    midShare: samples.mids / samples.sampleCount,
+    highlightShare: samples.highlights / samples.sampleCount,
+    clipBlackShare: samples.clipBlack / samples.sampleCount,
+    clipWhiteShare: samples.clipWhite / samples.sampleCount,
+    peak: peakIndex / (histogram.luma.length - 1),
+  };
+}
+
+function updateHistogramMetrics(details) {
+  histogramAvgText.textContent = formatIre(details.average);
+  histogramMedianText.textContent = formatIre(details.median);
+  histogramRangeText.textContent = `${formatIre(details.minimum)}-${formatIre(details.maximum)}`;
+  histogramSpreadText.textContent = `P10 ${formatIre(details.p10)} | P90 ${formatIre(details.p90)}`;
+  histogramZonesText.textContent = `S ${formatPercent(details.shadowShare)} | M ${formatPercent(details.midShare)} | H ${formatPercent(details.highlightShare)}`;
+  histogramClipText.textContent = `Blk ${formatPercent(details.clipBlackShare)} | Wht ${formatPercent(details.clipWhiteShare)}`;
+}
+
 function nextFrame() {
   return new Promise((resolve) => window.requestAnimationFrame(resolve));
 }
@@ -320,6 +568,113 @@ function clampWheelPoint(x, y) {
     x: Number((x / length).toFixed(4)),
     y: Number((y / length).toFixed(4)),
   };
+}
+
+function sanitizeCurvePoints(points, fallbackPoints = DEFAULT_CURVE_POINTS) {
+  const nextPoints = cloneCurvePoints(fallbackPoints);
+
+  if (Array.isArray(points)) {
+    for (let index = 0; index < CURVE_HANDLE_COUNT; index += 1) {
+      const sourcePoint = points[index];
+      if (!sourcePoint) {
+        continue;
+      }
+      if (typeof sourcePoint.x === "number" && Number.isFinite(sourcePoint.x)) {
+        nextPoints[index].x = sourcePoint.x;
+      }
+      if (typeof sourcePoint.y === "number" && Number.isFinite(sourcePoint.y)) {
+        nextPoints[index].y = sourcePoint.y;
+      }
+    }
+  }
+
+  nextPoints[0].x = clamp(nextPoints[0].x, 0.02, 0.82);
+  nextPoints[1].x = clamp(nextPoints[1].x, nextPoints[0].x + 0.08, 0.98);
+  nextPoints[0].x = clamp(nextPoints[0].x, 0.02, nextPoints[1].x - 0.08);
+  nextPoints[0].y = clampUnit(nextPoints[0].y);
+  nextPoints[1].y = clampUnit(nextPoints[1].y);
+
+  return nextPoints.map((point) => ({
+    x: Number(point.x.toFixed(4)),
+    y: Number(point.y.toFixed(4)),
+  }));
+}
+
+function sanitizeCurveDefinition(curveLike, fallbackKey) {
+  const fallback = DEFAULT_CURVES[fallbackKey];
+  let intensity = typeof curveLike?.intensity === "number" && Number.isFinite(curveLike.intensity)
+    ? curveLike.intensity
+    : fallback.intensity;
+
+  if (intensity > 1.0001) {
+    intensity /= 100;
+  }
+
+  return {
+    intensity: Number(clampUnit(intensity).toFixed(4)),
+    points: sanitizeCurvePoints(curveLike?.points, fallback.points),
+  };
+}
+
+function getCurveAnchors(definition) {
+  return [
+    { x: 0, y: 0 },
+    ...sanitizeCurvePoints(definition?.points),
+    { x: 1, y: 1 },
+  ];
+}
+
+function buildCurveTable(definition) {
+  const anchors = getCurveAnchors(definition);
+  const slopes = anchors.map((anchor, index) => {
+    if (index === 0) {
+      return (anchors[1].y - anchor.y) / Math.max(anchors[1].x - anchor.x, 0.0001);
+    }
+    if (index === anchors.length - 1) {
+      return (anchor.y - anchors[index - 1].y) / Math.max(anchor.x - anchors[index - 1].x, 0.0001);
+    }
+    return (anchors[index + 1].y - anchors[index - 1].y) / Math.max(anchors[index + 1].x - anchors[index - 1].x, 0.0001);
+  });
+
+  const table = new Float32Array(CURVE_TABLE_SIZE);
+  let segmentIndex = 0;
+  const denominator = CURVE_TABLE_SIZE - 1;
+
+  for (let index = 0; index < CURVE_TABLE_SIZE; index += 1) {
+    const x = index / denominator;
+    while (segmentIndex < anchors.length - 2 && x > anchors[segmentIndex + 1].x) {
+      segmentIndex += 1;
+    }
+
+    const left = anchors[segmentIndex];
+    const right = anchors[segmentIndex + 1];
+    const dx = Math.max(right.x - left.x, 0.0001);
+    const t = clamp((x - left.x) / dx, 0, 1);
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = (2 * t3) - (3 * t2) + 1;
+    const h10 = t3 - (2 * t2) + t;
+    const h01 = (-2 * t3) + (3 * t2);
+    const h11 = t3 - t2;
+
+    table[index] = clampUnit(
+      (h00 * left.y)
+      + (h10 * slopes[segmentIndex] * dx)
+      + (h01 * right.y)
+      + (h11 * slopes[segmentIndex + 1] * dx),
+    );
+  }
+
+  return table;
+}
+
+function sampleCurveTable(table, value) {
+  const clampedValue = clampUnit(value);
+  const position = clampedValue * (table.length - 1);
+  const index0 = Math.floor(position);
+  const index1 = Math.min(table.length - 1, index0 + 1);
+  const amount = position - index0;
+  return mix(table[index0], table[index1], amount);
 }
 
 function wheelPointToBias(point) {
@@ -445,6 +800,96 @@ function syncWheels(snapshot) {
   });
 }
 
+function curvePointToCanvas(canvas, point) {
+  const padding = 10;
+  const width = canvas.width - (padding * 2);
+  const height = canvas.height - (padding * 2);
+  return {
+    x: padding + (point.x * width),
+    y: canvas.height - padding - (point.y * height),
+  };
+}
+
+function drawCurve(key, definition) {
+  const curve = curveElements[key];
+  if (!curve?.canvas) {
+    return;
+  }
+
+  const canvas = curve.canvas;
+  const ctx = canvas.getContext("2d");
+  const { accent } = CURVE_META[key];
+  const points = sanitizeCurvePoints(definition.points);
+  const anchors = getCurveAnchors(definition);
+  const table = buildCurveTable(definition);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  for (let index = 0; index <= 4; index += 1) {
+    const x = 10 + (((canvas.width - 20) / 4) * index);
+    const y = 10 + (((canvas.height - 20) / 4) * index);
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, canvas.height - 10);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(10, y);
+    ctx.lineTo(canvas.width - 10, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "rgba(255,255,255,0.14)";
+  ctx.beginPath();
+  ctx.moveTo(10, canvas.height - 10);
+  ctx.lineTo(canvas.width - 10, 10);
+  ctx.stroke();
+
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let index = 0; index < table.length; index += 1) {
+    const point = {
+      x: index / (table.length - 1),
+      y: table[index],
+    };
+    const canvasPoint = curvePointToCanvas(canvas, point);
+    if (index === 0) {
+      ctx.moveTo(canvasPoint.x, canvasPoint.y);
+    } else {
+      ctx.lineTo(canvasPoint.x, canvasPoint.y);
+    }
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = "#000000";
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  anchors.forEach((anchor, index) => {
+    const canvasPoint = curvePointToCanvas(canvas, anchor);
+    const size = index === 0 || index === anchors.length - 1 ? 4 : 8;
+    ctx.fillRect(canvasPoint.x - (size * 0.5), canvasPoint.y - (size * 0.5), size, size);
+    ctx.strokeRect(canvasPoint.x - (size * 0.5), canvasPoint.y - (size * 0.5), size, size);
+  });
+
+  points.forEach((point) => {
+    const canvasPoint = curvePointToCanvas(canvas, point);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(canvasPoint.x - 5, canvasPoint.y - 5, 10, 10);
+  });
+}
+
+function syncCurves(snapshot) {
+  CURVE_KEYS.forEach((key) => {
+    const definition = sanitizeCurveDefinition(snapshot.curves[key], key);
+    drawCurve(key, definition);
+    curveElements[key].output.textContent = String(Math.round(definition.intensity * 100));
+  });
+}
+
 function setModuleCardState(card, enabled) {
   if (!card) {
     return;
@@ -503,8 +948,19 @@ function cloneDefaultSnapshot() {
     view: { ...DEFAULT_SNAPSHOT.view },
     lutSize: DEFAULT_SNAPSHOT.lutSize,
     conversionLut: DEFAULT_SNAPSHOT.conversionLut,
+    filterLut: DEFAULT_SNAPSHOT.filterLut,
     wheels: cloneWheelSnapshot(DEFAULT_SNAPSHOT.wheels),
+    curves: cloneCurveSnapshot(DEFAULT_SNAPSHOT.curves),
   };
+}
+
+function readCurveSnapshot() {
+  const curves = cloneCurveSnapshot(state.curves);
+  CURVE_KEYS.forEach((key) => {
+    curves[key].intensity = clampUnit(Number(curveElements[key].intensity.value) / 100);
+    curves[key].points = sanitizeCurvePoints(state.curves[key].points, DEFAULT_CURVES[key].points);
+  });
+  return curves;
 }
 
 function readSnapshot() {
@@ -512,6 +968,7 @@ function readSnapshot() {
     modules: {
       primary: moduleInputs.primary.checked,
       balance: moduleInputs.balance.checked,
+      curves: moduleInputs.curves.checked,
       tone: moduleInputs.tone.checked,
     },
     controls: {
@@ -527,12 +984,14 @@ function readSnapshot() {
       offset: Number(offsetInput.value),
     },
     view: {
-      splitView: splitViewToggle.checked,
-      splitPosition: Number(splitPositionInput.value),
+      splitView: splitToggleButton.getAttribute("aria-pressed") === "true",
+      splitPosition: 0.5,
     },
     lutSize: Number(lutSizeSelect.value),
     conversionLut: conversionLutSelect.value,
+    filterLut: filterLutSelect.value,
     wheels: cloneWheelSnapshot(state.wheels),
+    curves: readCurveSnapshot(),
   };
 }
 
@@ -560,6 +1019,7 @@ function applySnapshot(snapshotLike) {
   if (snapshotLike?.modules) {
     snapshot.modules.primary = snapshotLike.modules.primary ?? snapshot.modules.primary;
     snapshot.modules.balance = snapshotLike.modules.balance ?? snapshot.modules.balance;
+    snapshot.modules.curves = snapshotLike.modules.curves ?? snapshot.modules.curves;
     snapshot.modules.tone = snapshotLike.modules.tone ?? snapshot.modules.tone;
   }
 
@@ -587,6 +1047,9 @@ function applySnapshot(snapshotLike) {
   if (typeof snapshotLike?.conversionLut === "string") {
     snapshot.conversionLut = snapshotLike.conversionLut;
   }
+  if (typeof snapshotLike?.filterLut === "string") {
+    snapshot.filterLut = snapshotLike.filterLut;
+  }
 
   if (snapshotLike?.wheels) {
     WHEEL_KEYS.forEach((key) => {
@@ -603,8 +1066,15 @@ function applySnapshot(snapshotLike) {
     });
   }
 
+  if (snapshotLike?.curves) {
+    CURVE_KEYS.forEach((key) => {
+      snapshot.curves[key] = sanitizeCurveDefinition(snapshotLike.curves[key], key);
+    });
+  }
+
   moduleInputs.primary.checked = Boolean(snapshot.modules.primary);
   moduleInputs.balance.checked = Boolean(snapshot.modules.balance);
+  moduleInputs.curves.checked = Boolean(snapshot.modules.curves);
   moduleInputs.tone.checked = Boolean(snapshot.modules.tone);
 
   setRangeLikeValue(exposureInput, snapshot.controls.exposure);
@@ -617,28 +1087,45 @@ function applySnapshot(snapshotLike) {
   setRangeLikeValue(gammaInput, snapshot.controls.gamma);
   setRangeLikeValue(gainInput, snapshot.controls.gain);
   setRangeLikeValue(offsetInput, snapshot.controls.offset);
-  splitViewToggle.checked = Boolean(snapshot.view.splitView);
-  setRangeLikeValue(splitPositionInput, snapshot.view.splitPosition);
   lutSizeSelect.value = String([16, 32, 64].includes(snapshot.lutSize) ? snapshot.lutSize : DEFAULT_SNAPSHOT.lutSize);
   conversionLutSelect.value = CONVERSION_LUT_OPTIONS.some((option) => option.key === snapshot.conversionLut)
     ? snapshot.conversionLut
     : DEFAULT_SNAPSHOT.conversionLut;
+  filterLutSelect.value = FILTER_LUT_OPTIONS.some((option) => option.key === snapshot.filterLut)
+    ? snapshot.filterLut
+    : DEFAULT_SNAPSHOT.filterLut;
   state.wheels = cloneWheelSnapshot(snapshot.wheels);
+  CURVE_KEYS.forEach((key) => {
+    const definition = sanitizeCurveDefinition(snapshot.curves[key], key);
+    curveElements[key].intensity.value = String(Math.round(definition.intensity * 100));
+    snapshot.curves[key] = definition;
+  });
+  state.curves = cloneCurveSnapshot(snapshot.curves);
 
-  syncUi(readSnapshot());
+  syncUi(snapshot);
   void loadConversionLut(conversionLutSelect.value, true);
+  void loadFilterLut(filterLutSelect.value, true);
 }
 
 function buildPipelineSummary(snapshot) {
   const segments = [];
+  if (snapshot.conversionLut) {
+    segments.push("Conversion");
+  }
   if (snapshot.modules.primary) {
     segments.push("Primary");
   }
   if (snapshot.modules.balance) {
     segments.push("Balance");
   }
+  if (snapshot.modules.curves) {
+    segments.push("Curves");
+  }
   if (snapshot.modules.tone) {
     segments.push("Wheels");
+  }
+  if (snapshot.filterLut) {
+    segments.push("Filter");
   }
   if (segments.length === 0) {
     segments.push("Identity");
@@ -658,11 +1145,15 @@ function syncUi(snapshot = readSnapshot()) {
   gammaOutput.textContent = formatNumber(snapshot.controls.gamma, 2);
   gainOutput.textContent = formatNumber(snapshot.controls.gain, 2);
   offsetOutput.textContent = formatNumber(snapshot.controls.offset, 2);
-  splitPositionOutput.textContent = formatNumber(snapshot.view.splitPosition, 2);
   lutSizeOutput.textContent = String(snapshot.lutSize);
+
+  splitToggleButton.classList.toggle("active", snapshot.view.splitView);
+  splitToggleButton.setAttribute("aria-pressed", String(snapshot.view.splitView));
+  splitToggleButton.textContent = snapshot.view.splitView ? "Split On" : "Split Off";
 
   setModuleCardState(moduleCards.primary, snapshot.modules.primary);
   setModuleCardState(moduleCards.balance, snapshot.modules.balance);
+  setModuleCardState(moduleCards.curves, snapshot.modules.curves);
   setModuleCardState(moduleCards.tone, snapshot.modules.tone);
 
   pipelineSummaryText.textContent = buildPipelineSummary(snapshot);
@@ -674,13 +1165,22 @@ function syncUi(snapshot = readSnapshot()) {
     previewModeText.textContent = "Graded preview active";
   }
 
+  syncCurves(snapshot);
   syncWheels(snapshot);
 }
 
 function buildPipeline(snapshot) {
+  const curves = cloneCurveSnapshot(snapshot.curves);
+  const curveTables = {};
+  CURVE_KEYS.forEach((key) => {
+    curves[key] = sanitizeCurveDefinition(curves[key], key);
+    curveTables[key] = buildCurveTable(curves[key]);
+  });
+
   return {
     primaryEnabled: Boolean(snapshot.modules.primary),
     balanceEnabled: Boolean(snapshot.modules.balance),
+    curvesEnabled: Boolean(snapshot.modules.curves),
     toneEnabled: Boolean(snapshot.modules.tone),
     exposureMultiplier: Math.pow(2, snapshot.controls.exposure),
     contrast: snapshot.controls.contrast,
@@ -691,6 +1191,7 @@ function buildPipeline(snapshot) {
     gain: snapshot.controls.gain,
     offset: snapshot.controls.offset,
     conversionLut: snapshot.conversionLut === state.activeConversionLutKey ? state.activeConversionLut : null,
+    filterLut: snapshot.filterLut === state.activeFilterLutKey ? state.activeFilterLut : null,
     conversionScratch: state.conversionScratch,
     redScale: clamp(1 + (snapshot.controls.temperature * 0.18) - (snapshot.controls.tint * 0.06), 0.55, 1.45),
     greenScale: clamp(1 + (snapshot.controls.tint * 0.16), 0.55, 1.45),
@@ -699,6 +1200,8 @@ function buildPipeline(snapshot) {
     gammaBias: wheelPointToBias(snapshot.wheels.gamma),
     gainBias: wheelPointToBias(snapshot.wheels.gain),
     offsetBias: wheelPointToBias(snapshot.wheels.offset),
+    curves,
+    curveTables,
   };
 }
 
@@ -706,6 +1209,13 @@ function populateConversionLutSelect() {
   conversionLutSelect.innerHTML = [
     '<option value="">None</option>',
     ...CONVERSION_LUT_OPTIONS.map((option) => `<option value="${option.key}">${option.label}</option>`),
+  ].join("");
+}
+
+function populateFilterLutSelect() {
+  filterLutSelect.innerHTML = [
+    '<option value="">None</option>',
+    ...FILTER_LUT_OPTIONS.map((option) => `<option value="${option.key}">${option.label}</option>`),
   ].join("");
 }
 
@@ -863,7 +1373,7 @@ async function loadConversionLut(key, silent = false) {
       setStatus(`Loading ${option.label}...`);
     }
 
-    const response = await fetch(new URL(`../luts/${option.file}`, window.location.href));
+    const response = await fetch(new URL(`../luts/${CONVERSION_LUT_DIRECTORY}/${option.file}`, window.location.href));
     if (!response.ok) {
       throw new Error(`Could not load ${option.file}.`);
     }
@@ -892,6 +1402,111 @@ async function loadConversionLut(key, silent = false) {
     }
     return null;
   }
+}
+
+async function loadFilterLut(key, silent = false) {
+  const requestId = ++state.filterLutRequestId;
+
+  if (!key) {
+    state.activeFilterLutKey = "";
+    state.activeFilterLut = null;
+    if (!silent) {
+      setStatus("Filter LUT bypassed.");
+    }
+    scheduleRender();
+    return null;
+  }
+
+  const option = FILTER_LUT_OPTIONS.find((entry) => entry.key === key);
+  if (!option) {
+    state.activeFilterLutKey = "";
+    state.activeFilterLut = null;
+    scheduleRender();
+    return null;
+  }
+
+  try {
+    if (state.filterLutCache.has(key)) {
+      if (requestId !== state.filterLutRequestId) {
+        return state.filterLutCache.get(key);
+      }
+      state.activeFilterLutKey = key;
+      state.activeFilterLut = state.filterLutCache.get(key);
+      if (!silent) {
+        setStatus(`Loaded ${option.label}.`);
+      }
+      scheduleRender();
+      return state.activeFilterLut;
+    }
+
+    if (!silent) {
+      setStatus(`Loading ${option.label}...`);
+    }
+
+    const response = await fetch(new URL(`../luts/${FILTER_LUT_DIRECTORY}/${option.file}`, window.location.href));
+    if (!response.ok) {
+      throw new Error(`Could not load ${option.file}.`);
+    }
+
+    const parsed = parseCubeLut(await response.text(), option.label);
+    state.filterLutCache.set(key, parsed);
+
+    if (requestId !== state.filterLutRequestId) {
+      return parsed;
+    }
+
+    state.activeFilterLutKey = key;
+    state.activeFilterLut = parsed;
+    if (!silent) {
+      setStatus(`Loaded ${option.label}.`);
+    }
+    scheduleRender();
+    return parsed;
+  } catch (error) {
+    console.error(error);
+    if (requestId === state.filterLutRequestId) {
+      state.activeFilterLutKey = "";
+      state.activeFilterLut = null;
+      setStatus(error instanceof Error ? error.message : "Filter LUT load failed.");
+      scheduleRender();
+    }
+    return null;
+  }
+}
+
+function applyCurves(red, green, blue, pipeline, out) {
+  let r = red;
+  let g = green;
+  let b = blue;
+
+  const lumaIntensity = pipeline.curves.luma.intensity;
+  if (lumaIntensity > 0.0001) {
+    const sourceLuma = luma709(r, g, b);
+    const targetLuma = sampleCurveTable(pipeline.curveTables.luma, sourceLuma);
+    const lumaDelta = (targetLuma - sourceLuma) * lumaIntensity;
+    r = clampUnit(r + lumaDelta);
+    g = clampUnit(g + lumaDelta);
+    b = clampUnit(b + lumaDelta);
+  }
+
+  const redIntensity = pipeline.curves.red.intensity;
+  const greenIntensity = pipeline.curves.green.intensity;
+  const blueIntensity = pipeline.curves.blue.intensity;
+
+  if (redIntensity > 0.0001) {
+    r = mix(r, sampleCurveTable(pipeline.curveTables.red, r), redIntensity);
+  }
+  if (greenIntensity > 0.0001) {
+    g = mix(g, sampleCurveTable(pipeline.curveTables.green, g), greenIntensity);
+  }
+  if (blueIntensity > 0.0001) {
+    b = mix(b, sampleCurveTable(pipeline.curveTables.blue, b), blueIntensity);
+  }
+
+  out[0] = clampUnit(r);
+  out[1] = clampUnit(g);
+  out[2] = clampUnit(b);
+  return out;
 }
 
 function gradeFromLinear(linearR, linearG, linearB, pipeline, out) {
@@ -956,6 +1571,20 @@ function gradeFromLinear(linearR, linearG, linearB, pipeline, out) {
     sr = displayLuma + ((sr - displayLuma) * pipeline.saturation);
     sg = displayLuma + ((sg - displayLuma) * pipeline.saturation);
     sb = displayLuma + ((sb - displayLuma) * pipeline.saturation);
+  }
+
+  if (pipeline.curvesEnabled) {
+    applyCurves(sr, sg, sb, pipeline, out);
+    sr = out[0];
+    sg = out[1];
+    sb = out[2];
+  }
+
+  if (pipeline.filterLut) {
+    sampleCubeLut(pipeline.filterLut, sr, sg, sb, out);
+    sr = out[0];
+    sg = out[1];
+    sb = out[2];
   }
 
   out[0] = clamp(sr, 0, 1);
@@ -1064,24 +1693,129 @@ function drawPreviewComposite(snapshot = readSnapshot()) {
   previewCtx.strokeRect(handleX, handleY, handleSize, handleSize);
 }
 
-function drawHistogram(histogram) {
+function drawHistogram(histogram, details) {
   const width = histogramCanvas.width;
   const height = histogramCanvas.height;
-  const paddingX = 16;
-  const paddingY = 16;
+  const frontLeft = 74;
+  const frontRight = width - 28;
+  const floorBottom = height - 40;
+  const frontTop = 54;
+  const depthX = 72;
+  const depthY = 38;
+  const chartWidth = frontRight - frontLeft;
+  const chartHeight = floorBottom - frontTop;
+  const maxDepth = 0.94;
 
   histogramCtx.clearRect(0, 0, width, height);
   histogramCtx.fillStyle = "#050505";
   histogramCtx.fillRect(0, 0, width, height);
 
-  histogramCtx.strokeStyle = "rgba(255,255,255,0.08)";
-  histogramCtx.lineWidth = 1;
-  for (let index = 0; index < 5; index += 1) {
-    const y = paddingY + (((height - (paddingY * 2)) / 4) * index);
+  function projectPoint(xNorm, yNorm, zNorm) {
+    return {
+      x: frontLeft + (xNorm * chartWidth) - (zNorm * depthX),
+      y: floorBottom - (yNorm * chartHeight) - (zNorm * depthY),
+    };
+  }
+
+  function fillQuad(points, fillStyle) {
     histogramCtx.beginPath();
-    histogramCtx.moveTo(paddingX, y);
-    histogramCtx.lineTo(width - paddingX, y);
+    histogramCtx.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) {
+      histogramCtx.lineTo(points[index].x, points[index].y);
+    }
+    histogramCtx.closePath();
+    histogramCtx.fillStyle = fillStyle;
+    histogramCtx.fill();
+  }
+
+  function strokePath(points, strokeStyle, lineWidthValue, closePath = false) {
+    histogramCtx.beginPath();
+    histogramCtx.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) {
+      histogramCtx.lineTo(points[index].x, points[index].y);
+    }
+    if (closePath) {
+      histogramCtx.closePath();
+    }
+    histogramCtx.strokeStyle = strokeStyle;
+    histogramCtx.lineWidth = lineWidthValue;
     histogramCtx.stroke();
+  }
+
+  const floorPlane = [
+    projectPoint(0, 0, 0),
+    projectPoint(1, 0, 0),
+    projectPoint(1, 0, maxDepth),
+    projectPoint(0, 0, maxDepth),
+  ];
+  const backPlane = [
+    projectPoint(0, 0, maxDepth),
+    projectPoint(1, 0, maxDepth),
+    projectPoint(1, 1, maxDepth),
+    projectPoint(0, 1, maxDepth),
+  ];
+  const leftPlane = [
+    projectPoint(0, 0, 0),
+    projectPoint(0, 1, 0),
+    projectPoint(0, 1, maxDepth),
+    projectPoint(0, 0, maxDepth),
+  ];
+
+  fillQuad(floorPlane, "#060606");
+  fillQuad(backPlane, "#0a0a0a");
+  fillQuad(leftPlane, "#080808");
+
+  const zoneFills = [
+    { start: 0, end: 0.25, color: "rgba(75, 112, 255, 0.06)" },
+    { start: 0.25, end: 0.75, color: "rgba(255, 255, 255, 0.03)" },
+    { start: 0.75, end: 1, color: "rgba(255, 168, 72, 0.06)" },
+  ];
+
+  zoneFills.forEach((zone) => {
+    fillQuad([
+      projectPoint(zone.start, 0, 0),
+      projectPoint(zone.end, 0, 0),
+      projectPoint(zone.end, 0, maxDepth),
+      projectPoint(zone.start, 0, maxDepth),
+    ], zone.color);
+    fillQuad([
+      projectPoint(zone.start, 0, maxDepth),
+      projectPoint(zone.end, 0, maxDepth),
+      projectPoint(zone.end, 1, maxDepth),
+      projectPoint(zone.start, 1, maxDepth),
+    ], zone.color.replace("0.06", "0.04").replace("0.03", "0.025"));
+  });
+
+  histogramCtx.strokeStyle = "rgba(255,255,255,0.075)";
+  histogramCtx.lineWidth = 0.7;
+  for (let index = 0; index <= 4; index += 1) {
+    const yNorm = index / 4;
+    strokePath([
+      projectPoint(0, yNorm, 0),
+      projectPoint(1, yNorm, 0),
+      projectPoint(1, yNorm, maxDepth),
+      projectPoint(0, yNorm, maxDepth),
+    ], "rgba(255,255,255,0.075)", 0.7, true);
+
+    const xNorm = index / 4;
+    strokePath([
+      projectPoint(xNorm, 0, 0),
+      projectPoint(xNorm, 1, 0),
+    ], "rgba(255,255,255,0.065)", 0.7);
+    strokePath([
+      projectPoint(xNorm, 0, maxDepth),
+      projectPoint(xNorm, 1, maxDepth),
+    ], "rgba(255,255,255,0.055)", 0.65);
+  }
+
+  for (let index = 1; index <= 4; index += 1) {
+    const zNorm = (index / 4) * maxDepth;
+    strokePath([
+      projectPoint(0, 0, zNorm),
+      projectPoint(1, 0, zNorm),
+      projectPoint(1, 1, zNorm),
+      projectPoint(0, 1, zNorm),
+    ], "rgba(255,255,255,0.05)", 0.55, true);
   }
 
   const maximum = Math.max(
@@ -1092,26 +1826,132 @@ function drawHistogram(histogram) {
     ...histogram.luma,
   );
 
-  function strokeTrace(values, color, lineWidthValue) {
-    histogramCtx.strokeStyle = color;
-    histogramCtx.lineWidth = lineWidthValue;
+  function strokeTraceOnDepth(values, color, lineWidthValue, zNorm) {
     histogramCtx.beginPath();
     values.forEach((value, index) => {
-      const x = paddingX + ((index / (values.length - 1)) * (width - (paddingX * 2)));
-      const y = height - paddingY - ((value / maximum) * (height - (paddingY * 2)));
+      const point = projectPoint(index / (values.length - 1), value / maximum, zNorm);
       if (index === 0) {
-        histogramCtx.moveTo(x, y);
+        histogramCtx.moveTo(point.x, point.y);
       } else {
-        histogramCtx.lineTo(x, y);
+        histogramCtx.lineTo(point.x, point.y);
       }
     });
+    histogramCtx.strokeStyle = color;
+    histogramCtx.lineWidth = lineWidthValue;
     histogramCtx.stroke();
   }
 
-  strokeTrace(histogram.red, "rgba(255, 72, 72, 0.85)", 1.5);
-  strokeTrace(histogram.green, "rgba(72, 255, 120, 0.85)", 1.5);
-  strokeTrace(histogram.blue, "rgba(72, 150, 255, 0.85)", 1.5);
-  strokeTrace(histogram.luma, "rgba(255,255,255,0.85)", 1.8);
+  histogram.luma.forEach((value, index) => {
+    const x0Norm = index / histogram.luma.length;
+    const x1Norm = (index + 0.86) / histogram.luma.length;
+    const yNorm = value / maximum;
+    const depthNorm = maxDepth * (0.82 + (yNorm * 0.16));
+    const tone = 0.12 + ((index / (histogram.luma.length - 1)) * 0.3);
+
+    fillQuad([
+      projectPoint(x0Norm, 0, 0),
+      projectPoint(x1Norm, 0, 0),
+      projectPoint(x1Norm, yNorm, 0),
+      projectPoint(x0Norm, yNorm, 0),
+    ], `rgba(255,255,255,${0.035 + (yNorm * 0.06)})`);
+
+    fillQuad([
+      projectPoint(x0Norm, yNorm, 0),
+      projectPoint(x1Norm, yNorm, 0),
+      projectPoint(x1Norm, yNorm, depthNorm),
+      projectPoint(x0Norm, yNorm, depthNorm),
+    ], `rgba(255,255,255,${0.08 + tone})`);
+
+    fillQuad([
+      projectPoint(x1Norm, 0, 0),
+      projectPoint(x1Norm, yNorm, 0),
+      projectPoint(x1Norm, yNorm, depthNorm),
+      projectPoint(x1Norm, 0, depthNorm),
+    ], "rgba(255,255,255,0.045)");
+
+    strokePath([
+      projectPoint(x0Norm, yNorm, depthNorm),
+      projectPoint(x1Norm, yNorm, depthNorm),
+    ], "rgba(255,255,255,0.09)", 0.45);
+  });
+
+  strokeTraceOnDepth(histogram.red, "rgba(255, 82, 82, 0.78)", 0.72, maxDepth * 0.18);
+  strokeTraceOnDepth(histogram.green, "rgba(82, 255, 120, 0.78)", 0.72, maxDepth * 0.42);
+  strokeTraceOnDepth(histogram.blue, "rgba(82, 150, 255, 0.78)", 0.72, maxDepth * 0.66);
+  strokeTraceOnDepth(histogram.luma, "rgba(255,255,255,0.86)", 0.9, maxDepth * 0.9);
+
+  strokePath([
+    projectPoint(0, 0, 0),
+    projectPoint(1, 0, 0),
+    projectPoint(1, 1, 0),
+    projectPoint(0, 1, 0),
+  ], "rgba(255,255,255,0.14)", 0.8, true);
+  strokePath([
+    projectPoint(0, 0, maxDepth),
+    projectPoint(1, 0, maxDepth),
+    projectPoint(1, 1, maxDepth),
+    projectPoint(0, 1, maxDepth),
+  ], "rgba(255,255,255,0.14)", 0.8, true);
+  strokePath([
+    projectPoint(0, 0, 0),
+    projectPoint(0, 0, maxDepth),
+    projectPoint(0, 1, maxDepth),
+    projectPoint(0, 1, 0),
+  ], "rgba(255,255,255,0.11)", 0.75, true);
+  strokePath([
+    projectPoint(1, 0, 0),
+    projectPoint(1, 0, maxDepth),
+    projectPoint(1, 1, maxDepth),
+    projectPoint(1, 1, 0),
+  ], "rgba(255,255,255,0.11)", 0.75, true);
+
+  [
+    { label: "P10", value: details.p10, color: "rgba(120, 170, 255, 0.65)" },
+    { label: "P50", value: details.median, color: "rgba(255,255,255,0.75)" },
+    { label: "P90", value: details.p90, color: "rgba(255, 180, 90, 0.7)" },
+    { label: "Peak", value: details.peak, color: "rgba(90, 255, 170, 0.55)" },
+  ].forEach((marker) => {
+    const xNorm = marker.value;
+    fillQuad([
+      projectPoint(xNorm, 0, 0),
+      projectPoint(xNorm, 1, 0),
+      projectPoint(xNorm, 1, maxDepth),
+      projectPoint(xNorm, 0, maxDepth),
+    ], marker.color.replace(/0\.\d+\)/, "0.06)"));
+    strokePath([
+      projectPoint(xNorm, 0, 0),
+      projectPoint(xNorm, 1, 0),
+      projectPoint(xNorm, 1, maxDepth),
+      projectPoint(xNorm, 0, maxDepth),
+    ], marker.color, 0.75, true);
+
+    const labelPoint = projectPoint(xNorm, 1, maxDepth);
+    const labelX = clamp(labelPoint.x, 24, width - 24);
+
+    histogramCtx.fillStyle = "#000000";
+    histogramCtx.fillRect(labelX - 16, 10, 32, 14);
+    histogramCtx.strokeStyle = marker.color;
+    histogramCtx.lineWidth = 0.8;
+    histogramCtx.strokeRect(labelX - 16, 10, 32, 14);
+    histogramCtx.fillStyle = "#ffffff";
+    histogramCtx.font = '10px "SF Mono", "Roboto Mono", monospace';
+    histogramCtx.textAlign = "center";
+    histogramCtx.textBaseline = "middle";
+    histogramCtx.fillText(marker.label, labelX, 17);
+  });
+
+  histogramCtx.fillStyle = "rgba(255,255,255,0.75)";
+  histogramCtx.font = '10px "SF Mono", "Roboto Mono", monospace';
+  histogramCtx.textAlign = "center";
+  histogramCtx.textBaseline = "top";
+  [0, 25, 50, 75, 100].forEach((value) => {
+    const point = projectPoint(value / 100, 0, 0);
+    histogramCtx.fillText(String(value), point.x, floorBottom + 8);
+  });
+
+  histogramCtx.textAlign = "left";
+  histogramCtx.fillText("IRE", frontRight + 8, floorBottom + 8);
+  histogramCtx.fillText("Z", projectPoint(1, 0, maxDepth).x + 10, projectPoint(1, 0, maxDepth).y - 8);
 }
 
 function renderProcessedPreview() {
@@ -1136,6 +1976,15 @@ function renderProcessedPreview() {
     green: new Uint32Array(HISTOGRAM_BINS),
     blue: new Uint32Array(HISTOGRAM_BINS),
     luma: new Uint32Array(HISTOGRAM_BINS),
+  };
+  const histogramSamples = {
+    sampleCount: 0,
+    lumaSum: 0,
+    shadows: 0,
+    mids: 0,
+    highlights: 0,
+    clipBlack: 0,
+    clipWhite: 0,
   };
 
   const pixelCount = sourcePixels.length / 4;
@@ -1165,6 +2014,22 @@ function renderProcessedPreview() {
       histogram.green[greenBin] += 1;
       histogram.blue[blueBin] += 1;
       histogram.luma[lumaBin] += 1;
+
+      histogramSamples.sampleCount += 1;
+      histogramSamples.lumaSum += lumaValue;
+      if (lumaValue < 0.25) {
+        histogramSamples.shadows += 1;
+      } else if (lumaValue < 0.75) {
+        histogramSamples.mids += 1;
+      } else {
+        histogramSamples.highlights += 1;
+      }
+      if (lumaValue <= 0.02) {
+        histogramSamples.clipBlack += 1;
+      }
+      if (lumaValue >= 0.98) {
+        histogramSamples.clipWhite += 1;
+      }
     }
 
     sampleCounter += 1;
@@ -1173,8 +2038,10 @@ function renderProcessedPreview() {
     }
   }
 
-  histogramSummaryText.textContent = `${HISTOGRAM_BINS} bins | ${Math.ceil(pixelCount / sampleStride).toLocaleString()} samples`;
-  drawHistogram(histogram);
+  const histogramDetails = computeHistogramDetails(histogram, histogramSamples);
+  histogramSummaryText.textContent = `3D scope | ${HISTOGRAM_BINS} bins | ${histogramDetails.sampleCount.toLocaleString()} samples | peak ${formatIre(histogramDetails.peak)}`;
+  updateHistogramMetrics(histogramDetails);
+  drawHistogram(histogram, histogramDetails);
   drawPreviewComposite(snapshot);
 }
 
@@ -1387,6 +2254,64 @@ function resetWheel(key) {
   scheduleRender();
 }
 
+function curveEventToPoint(canvas, event) {
+  const rect = canvas.getBoundingClientRect();
+  const padding = 10;
+  const width = Math.max(1, rect.width - (padding * 2));
+  const height = Math.max(1, rect.height - (padding * 2));
+  return {
+    x: Number(clamp((event.clientX - rect.left - padding) / width, 0, 1).toFixed(4)),
+    y: Number((1 - clamp((event.clientY - rect.top - padding) / height, 0, 1)).toFixed(4)),
+  };
+}
+
+function getNearestCurveHandleIndex(key, point) {
+  const points = sanitizeCurvePoints(state.curves[key].points, DEFAULT_CURVES[key].points);
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  points.forEach((curvePoint, index) => {
+    const distance = Math.hypot(curvePoint.x - point.x, curvePoint.y - point.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+
+  return bestIndex;
+}
+
+function setCurvePoint(key, handleIndex, point) {
+  const definition = sanitizeCurveDefinition(state.curves[key], key);
+  const points = definition.points;
+
+  if (handleIndex === 0) {
+    points[0] = {
+      x: Number(clamp(point.x, 0.02, points[1].x - 0.08).toFixed(4)),
+      y: Number(clampUnit(point.y).toFixed(4)),
+    };
+  } else {
+    points[1] = {
+      x: Number(clamp(point.x, points[0].x + 0.08, 0.98).toFixed(4)),
+      y: Number(clampUnit(point.y).toFixed(4)),
+    };
+  }
+
+  state.curves[key] = {
+    intensity: definition.intensity,
+    points,
+  };
+  syncUi(readSnapshot());
+  scheduleRender();
+}
+
+function resetCurve(key) {
+  state.curves[key] = sanitizeCurveDefinition(DEFAULT_CURVES[key], key);
+  curveElements[key].intensity.value = "100";
+  syncUi(readSnapshot());
+  scheduleRender();
+}
+
 async function exportPng() {
   if (!state.gradedImageData) {
     setStatus("Nothing to export yet.");
@@ -1413,6 +2338,9 @@ async function exportLut() {
   const snapshot = readSnapshot();
   if (snapshot.conversionLut !== state.activeConversionLutKey) {
     await loadConversionLut(snapshot.conversionLut, true);
+  }
+  if (snapshot.filterLut !== state.activeFilterLutKey) {
+    await loadFilterLut(snapshot.filterLut, true);
   }
   const size = snapshot.lutSize;
   const filename = `${buildBaseFilename()}-${size}.cube`;
@@ -1450,7 +2378,7 @@ function exportPreset() {
   const snapshot = readSnapshot();
   const payload = {
     app: "lut-gen",
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString(),
     sourceHint: state.sourceName,
     ...snapshot,
@@ -1516,6 +2444,50 @@ function bindWheelInputs() {
   });
 }
 
+function bindCurveInputs() {
+  CURVE_KEYS.forEach((key) => {
+    const curve = curveElements[key];
+    const canvas = curve.canvas;
+    canvas.width = CURVE_CANVAS_WIDTH;
+    canvas.height = CURVE_CANVAS_HEIGHT;
+
+    canvas.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const point = curveEventToPoint(canvas, event);
+      canvas.dataset.handleIndex = String(getNearestCurveHandleIndex(key, point));
+      canvas.setPointerCapture(event.pointerId);
+      setCurvePoint(key, Number(canvas.dataset.handleIndex), point);
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        setCurvePoint(key, Number(canvas.dataset.handleIndex || 0), curveEventToPoint(canvas, event));
+      }
+    });
+
+    canvas.addEventListener("pointerup", (event) => {
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      delete canvas.dataset.handleIndex;
+    });
+
+    canvas.addEventListener("pointercancel", (event) => {
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      delete canvas.dataset.handleIndex;
+    });
+
+    canvas.addEventListener("dblclick", () => resetCurve(key));
+    curve.reset.addEventListener("click", () => resetCurve(key));
+    curve.intensity.addEventListener("input", () => {
+      syncUi(readSnapshot());
+      scheduleRender();
+    });
+  });
+}
+
 function bindPipelineInputs() {
   [
     exposureInput,
@@ -1542,11 +2514,9 @@ function bindPipelineInputs() {
     });
   });
 
-  splitViewToggle.addEventListener("change", () => {
-    drawPreviewComposite(readSnapshot());
-  });
-
-  splitPositionInput.addEventListener("input", () => {
+  splitToggleButton.addEventListener("click", () => {
+    const nextState = splitToggleButton.getAttribute("aria-pressed") !== "true";
+    splitToggleButton.setAttribute("aria-pressed", String(nextState));
     drawPreviewComposite(readSnapshot());
   });
 
@@ -1556,6 +2526,10 @@ function bindPipelineInputs() {
 
   conversionLutSelect.addEventListener("change", () => {
     void loadConversionLut(conversionLutSelect.value);
+  });
+
+  filterLutSelect.addEventListener("change", () => {
+    void loadFilterLut(filterLutSelect.value);
   });
 }
 
@@ -1607,7 +2581,9 @@ function bindActionInputs() {
 
 function init() {
   populateConversionLutSelect();
+  populateFilterLutSelect();
   bindWheelInputs();
+  bindCurveInputs();
   applySnapshot(DEFAULT_SNAPSHOT);
   bindPipelineInputs();
   bindActionInputs();

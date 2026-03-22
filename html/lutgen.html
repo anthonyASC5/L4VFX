@@ -329,6 +329,12 @@
         background: #050505;
       }
 
+      .histogram-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+      }
+
       .mini-grid {
         display: grid;
         gap: 6px;
@@ -464,7 +470,19 @@
         gap: 8px;
       }
 
+      .curves-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
       .wheel-card {
+        border: 1px solid var(--line);
+        background: #080808;
+        padding: 8px;
+      }
+
+      .curve-card {
         border: 1px solid var(--line);
         background: #080808;
         padding: 8px;
@@ -480,6 +498,20 @@
 
       .wheel-title {
         font-size: 0.66rem;
+      }
+
+      .curve-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .curve-title {
+        font-size: 0.66rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       .wheel-reset {
@@ -498,6 +530,16 @@
         cursor: crosshair;
       }
 
+      .curve-canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--line);
+        background: #050505;
+        touch-action: none;
+        cursor: crosshair;
+      }
+
       .wheel-readout {
         margin-top: 6px;
         color: var(--text-muted);
@@ -506,6 +548,10 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .curve-intensity {
+        margin-top: 8px;
       }
 
       .status-box {
@@ -566,6 +612,8 @@
         .stage-meta,
         .dense-grid,
         .two-up,
+        .histogram-metrics,
+        .curves-grid,
         .wheels-grid {
           grid-template-columns: 1fr;
         }
@@ -619,7 +667,7 @@
                   </div>
                   <div class="metric">
                     <span class="metric-label">Pipeline</span>
-                    <strong id="pipeline-summary" class="metric-value">Primary -> Balance -> Wheels -> LUT</strong>
+                    <strong id="pipeline-summary" class="metric-value">Primary -> Balance -> Curves -> Wheels -> LUT</strong>
                   </div>
                 </div>
 
@@ -628,7 +676,7 @@
                 </div>
 
                 <div class="preview-meta">
-                  <span id="preview-mode-text">Split view active</span>
+                  <span id="preview-mode-text">Graded preview active</span>
                   <span id="render-metrics">Preview scale: 1.00x</span>
                 </div>
               </div>
@@ -638,12 +686,38 @@
               <div class="panel-head">
                 <div>
                   <strong>Histogram</strong>
-                  <span>RGB + luma</span>
+                  <span>3D luma scope + RGB overlays</span>
                 </div>
-                <span id="histogram-summary">96 bins</span>
+                <span id="histogram-summary">3D luma scope</span>
               </div>
-              <div class="panel-body">
-                <canvas id="histogram-canvas" width="480" height="220"></canvas>
+              <div class="panel-body mini-grid">
+                <canvas id="histogram-canvas" width="640" height="300"></canvas>
+                <div class="histogram-metrics">
+                  <div class="metric">
+                    <span class="metric-label">Avg Luma</span>
+                    <strong id="histogram-avg" class="metric-value">0.0 IRE</strong>
+                  </div>
+                  <div class="metric">
+                    <span class="metric-label">Median</span>
+                    <strong id="histogram-median" class="metric-value">0.0 IRE</strong>
+                  </div>
+                  <div class="metric">
+                    <span class="metric-label">Range</span>
+                    <strong id="histogram-range" class="metric-value">0.0-0.0 IRE</strong>
+                  </div>
+                  <div class="metric">
+                    <span class="metric-label">Spread</span>
+                    <strong id="histogram-spread" class="metric-value">P10 0.0 | P90 0.0</strong>
+                  </div>
+                  <div class="metric">
+                    <span class="metric-label">Zones</span>
+                    <strong id="histogram-zones" class="metric-value">S 0.0 | M 0.0 | H 0.0</strong>
+                  </div>
+                  <div class="metric">
+                    <span class="metric-label">Clip</span>
+                    <strong id="histogram-clip" class="metric-value">Blk 0.0 | Wht 0.0</strong>
+                  </div>
+                </div>
               </div>
             </section>
           </section>
@@ -687,16 +761,11 @@
                   </div>
                   <div class="field-row">
                     <div class="field-head">
-                      <label for="split-position" class="mini-label">Split</label>
-                      <output id="split-position-output" class="field-output">0.50</output>
+                      <span class="mini-label">Split Preview</span>
                     </div>
-                    <input id="split-position" type="range" min="0.05" max="0.95" step="0.01" value="0.5" />
+                    <button id="split-toggle-button" class="button" type="button" aria-pressed="false">Split Off</button>
                   </div>
                 </div>
-                <label class="toggle">
-                  <input id="split-view-toggle" type="checkbox" checked />
-                  <span>Split View</span>
-                </label>
                 <div class="status-box">
                   <span class="status-label">Status</span>
                   <strong id="status-text" class="status-copy">Demo still loaded. Import an image to start matching a shot.</strong>
@@ -722,6 +791,13 @@
                     </label>
                   </div>
                   <div class="control-grid">
+                    <div class="field-row">
+                      <div class="field-head">
+                        <label for="filter-lut-select" class="mini-label">Filter LUT</label>
+                        <span class="field-output">Creative</span>
+                      </div>
+                      <select id="filter-lut-select" class="field"></select>
+                    </div>
                     <div class="field-row">
                       <div class="field-head">
                         <label for="exposure" class="mini-label">Exposure</label>
@@ -775,6 +851,82 @@
                         <output id="tint-output" class="field-output">0.00</output>
                       </div>
                       <input id="tint" type="range" min="-1" max="1" step="0.01" value="0" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="module-curves-card" class="panel">
+              <div class="panel-head">
+                <div>
+                  <strong>Curves</strong>
+                  <span>Luma and RGB correction</span>
+                </div>
+                <label class="toggle">
+                  <input id="module-curves" type="checkbox" checked />
+                  <span>On</span>
+                </label>
+              </div>
+              <div class="panel-body control-grid">
+                <div class="curves-grid">
+                  <div class="curve-card">
+                    <div class="curve-head">
+                      <span class="curve-title">Luminance</span>
+                      <button class="button wheel-reset" data-curve-reset="luma" type="button">Reset</button>
+                    </div>
+                    <canvas id="curve-luma" class="curve-canvas" width="184" height="132"></canvas>
+                    <div class="field-row curve-intensity">
+                      <div class="field-head">
+                        <label for="curve-luma-intensity" class="mini-label">Intensity</label>
+                        <output id="curve-luma-intensity-output" class="field-output">100</output>
+                      </div>
+                      <input id="curve-luma-intensity" type="range" min="0" max="100" step="1" value="100" />
+                    </div>
+                  </div>
+
+                  <div class="curve-card">
+                    <div class="curve-head">
+                      <span class="curve-title">Red</span>
+                      <button class="button wheel-reset" data-curve-reset="red" type="button">Reset</button>
+                    </div>
+                    <canvas id="curve-red" class="curve-canvas" width="184" height="132"></canvas>
+                    <div class="field-row curve-intensity">
+                      <div class="field-head">
+                        <label for="curve-red-intensity" class="mini-label">Intensity</label>
+                        <output id="curve-red-intensity-output" class="field-output">100</output>
+                      </div>
+                      <input id="curve-red-intensity" type="range" min="0" max="100" step="1" value="100" />
+                    </div>
+                  </div>
+
+                  <div class="curve-card">
+                    <div class="curve-head">
+                      <span class="curve-title">Green</span>
+                      <button class="button wheel-reset" data-curve-reset="green" type="button">Reset</button>
+                    </div>
+                    <canvas id="curve-green" class="curve-canvas" width="184" height="132"></canvas>
+                    <div class="field-row curve-intensity">
+                      <div class="field-head">
+                        <label for="curve-green-intensity" class="mini-label">Intensity</label>
+                        <output id="curve-green-intensity-output" class="field-output">100</output>
+                      </div>
+                      <input id="curve-green-intensity" type="range" min="0" max="100" step="1" value="100" />
+                    </div>
+                  </div>
+
+                  <div class="curve-card">
+                    <div class="curve-head">
+                      <span class="curve-title">Blue</span>
+                      <button class="button wheel-reset" data-curve-reset="blue" type="button">Reset</button>
+                    </div>
+                    <canvas id="curve-blue" class="curve-canvas" width="184" height="132"></canvas>
+                    <div class="field-row curve-intensity">
+                      <div class="field-head">
+                        <label for="curve-blue-intensity" class="mini-label">Intensity</label>
+                        <output id="curve-blue-intensity-output" class="field-output">100</output>
+                      </div>
+                      <input id="curve-blue-intensity" type="range" min="0" max="100" step="1" value="100" />
                     </div>
                   </div>
                 </div>
