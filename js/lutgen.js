@@ -1,8 +1,9 @@
 const MAX_PREVIEW_EDGE = 1600;
-const HISTOGRAM_BINS = 96;
-const HISTOGRAM_TARGET_SAMPLES = 120000;
+const HISTOGRAM_BINS = 72;
+const HISTOGRAM_TARGET_SAMPLES = 36000;
+const HISTOGRAM_DEBOUNCE_MS = 90;
 const SOURCE_ALPHA_THRESHOLD = 8;
-const WHEEL_CANVAS_SIZE = 168;
+const WHEEL_CANVAS_SIZE = 144;
 const CURVE_CANVAS_WIDTH = 184;
 const CURVE_CANVAS_HEIGHT = 132;
 const CURVE_TABLE_SIZE = 256;
@@ -171,6 +172,8 @@ const curveElements = {
   },
 };
 
+const collapsiblePanels = Array.from(document.querySelectorAll('[data-collapsible="true"]'));
+
 const DEFAULT_SNAPSHOT = Object.freeze({
   modules: Object.freeze({
     primary: true,
@@ -223,6 +226,11 @@ const state = {
   conversionScratch: new Float32Array(3),
   wheels: cloneWheelSnapshot(),
   wheelBaseCanvas: null,
+  histogramBaseCanvas: null,
+  histogramBuffer: createHistogramBuffer(),
+  histogramRequestId: 0,
+  histogramDebounceTimer: 0,
+  histogramIdleCallbackId: 0,
   curves: cloneCurveSnapshot(),
   activeConversionLutKey: "",
   activeConversionLut: null,
@@ -394,6 +402,15 @@ function cloneCurveSnapshot(curves = DEFAULT_CURVES) {
   return nextCurves;
 }
 
+function createHistogramBuffer() {
+  return {
+    red: new Uint32Array(HISTOGRAM_BINS),
+    green: new Uint32Array(HISTOGRAM_BINS),
+    blue: new Uint32Array(HISTOGRAM_BINS),
+    luma: new Uint32Array(HISTOGRAM_BINS),
+  };
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -485,7 +502,7 @@ function percentileFromHistogram(values, percentile, total) {
 }
 
 function computeHistogramDetails(histogram, samples) {
-  if (!samples) {
+  if (!samples || !samples.sampleCount) {
     return {
       sampleCount: 0,
       average: 0,
@@ -554,6 +571,52 @@ function nextFrame() {
 
 function setStatus(message) {
   statusText.textContent = message;
+}
+
+function resetHistogramBuffer(histogram) {
+  histogram.red.fill(0);
+  histogram.green.fill(0);
+  histogram.blue.fill(0);
+  histogram.luma.fill(0);
+}
+
+function setPanelCollapsed(panel, collapsed) {
+  if (!panel) {
+    return;
+  }
+
+  const body = panel.querySelector(".panel-body");
+  const toggleButton = panel.querySelector("[data-panel-toggle]");
+  const nextCollapsed = Boolean(collapsed);
+  panel.dataset.collapsed = nextCollapsed ? "true" : "false";
+
+  if (body) {
+    body.hidden = nextCollapsed;
+  }
+
+  if (toggleButton) {
+    toggleButton.setAttribute("aria-expanded", String(!nextCollapsed));
+    const text = toggleButton.querySelector(".panel-toggle-text");
+    if (text) {
+      text.textContent = nextCollapsed ? "Open" : "Close";
+    }
+  }
+}
+
+function bindPanelToggles() {
+  collapsiblePanels.forEach((panel) => {
+    const toggleButton = panel.querySelector("[data-panel-toggle]");
+    const isCollapsed = panel.dataset.collapsed !== "false";
+    setPanelCollapsed(panel, isCollapsed);
+
+    if (!toggleButton) {
+      return;
+    }
+
+    toggleButton.addEventListener("click", () => {
+      setPanelCollapsed(panel, panel.dataset.collapsed !== "true");
+    });
+  });
 }
 
 function clampWheelPoint(x, y) {
@@ -756,17 +819,22 @@ function drawWheel(key, point) {
   const puckY = center + (point.y * radius);
 
   ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = "#050505";
+  ctx.fillStyle = "#040913";
   ctx.fillRect(0, 0, size, size);
   ctx.drawImage(ensureWheelBaseCanvas(size), 0, 0);
 
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.strokeStyle = "rgba(217,251,255,0.18)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(center, center, radius, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.strokeStyle = "rgba(217,251,255,0.08)";
+  ctx.beginPath();
+  ctx.arc(center, center, radius * 0.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = "rgba(217,251,255,0.12)";
   ctx.beginPath();
   ctx.moveTo(center, 6);
   ctx.lineTo(center, size - 6);
@@ -774,11 +842,21 @@ function drawWheel(key, point) {
   ctx.lineTo(size - 6, center);
   ctx.stroke();
 
-  ctx.fillStyle = "#000000";
+  ctx.beginPath();
+  ctx.arc(puckX, puckY, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#05101a";
+  ctx.shadowColor = "rgba(121, 221, 255, 0.48)";
+  ctx.shadowBlur = 14;
+  ctx.fill();
+  ctx.shadowBlur = 0;
   ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 1.5;
-  ctx.fillRect(puckX - 5, puckY - 5, 10, 10);
-  ctx.strokeRect(puckX - 5, puckY - 5, 10, 10);
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(puckX, puckY, 2, 0, Math.PI * 2);
+  ctx.fillStyle = "#f3fbff";
+  ctx.fill();
 }
 
 function updateWheelReadout(key, point) {
@@ -824,11 +902,20 @@ function drawCurve(key, definition) {
   const table = buildCurveTable(definition);
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#050505";
+  const background = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  background.addColorStop(0, "#09111d");
+  background.addColorStop(1, "#040913");
+  ctx.fillStyle = background;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 1;
+  const ambient = ctx.createRadialGradient(canvas.width * 0.5, 0, 10, canvas.width * 0.5, 0, canvas.width * 0.8);
+  ambient.addColorStop(0, `${accent}22`);
+  ambient.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = ambient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "rgba(217, 251, 255, 0.07)";
+  ctx.lineWidth = 0.8;
   for (let index = 0; index <= 4; index += 1) {
     const x = 10 + (((canvas.width - 20) / 4) * index);
     const y = 10 + (((canvas.height - 20) / 4) * index);
@@ -842,14 +929,34 @@ function drawCurve(key, definition) {
     ctx.stroke();
   }
 
-  ctx.strokeStyle = "rgba(255,255,255,0.14)";
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "rgba(217, 251, 255, 0.16)";
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
   ctx.moveTo(10, canvas.height - 10);
   ctx.lineTo(canvas.width - 10, 10);
   ctx.stroke();
+  ctx.restore();
 
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(10, canvas.height - 10);
+  for (let index = 0; index < table.length; index += 1) {
+    const point = {
+      x: index / (table.length - 1),
+      y: table[index],
+    };
+    const canvasPoint = curvePointToCanvas(canvas, point);
+    ctx.lineTo(canvasPoint.x, canvasPoint.y);
+  }
+  ctx.lineTo(canvas.width - 10, canvas.height - 10);
+  ctx.closePath();
+  const fill = ctx.createLinearGradient(0, 10, 0, canvas.height - 10);
+  fill.addColorStop(0, `${accent}26`);
+  fill.addColorStop(1, `${accent}02`);
+  ctx.fillStyle = fill;
+  ctx.fill();
+
   ctx.beginPath();
   for (let index = 0; index < table.length; index += 1) {
     const point = {
@@ -863,22 +970,47 @@ function drawCurve(key, definition) {
       ctx.lineTo(canvasPoint.x, canvasPoint.y);
     }
   }
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = `${accent}40`;
+  ctx.lineWidth = 4;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur = 14;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
-  ctx.fillStyle = "#000000";
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
   anchors.forEach((anchor, index) => {
     const canvasPoint = curvePointToCanvas(canvas, anchor);
-    const size = index === 0 || index === anchors.length - 1 ? 4 : 8;
-    ctx.fillRect(canvasPoint.x - (size * 0.5), canvasPoint.y - (size * 0.5), size, size);
-    ctx.strokeRect(canvasPoint.x - (size * 0.5), canvasPoint.y - (size * 0.5), size, size);
+    const radius = index === 0 || index === anchors.length - 1 ? 2.8 : 3.6;
+    ctx.beginPath();
+    ctx.arc(canvasPoint.x, canvasPoint.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(5, 12, 20, 0.95)";
+    ctx.fill();
+    ctx.strokeStyle = index === 0 || index === anchors.length - 1 ? "rgba(217, 251, 255, 0.22)" : `${accent}88`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
   });
 
   points.forEach((point) => {
     const canvasPoint = curvePointToCanvas(canvas, point);
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(canvasPoint.x - 5, canvasPoint.y - 5, 10, 10);
+    ctx.beginPath();
+    ctx.arc(canvasPoint.x, canvasPoint.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#06101a";
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#f3fbff";
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(canvasPoint.x, canvasPoint.y, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = accent;
+    ctx.fill();
   });
 }
 
@@ -1149,6 +1281,7 @@ function syncUi(snapshot = readSnapshot()) {
 
   splitToggleButton.classList.toggle("active", snapshot.view.splitView);
   splitToggleButton.setAttribute("aria-pressed", String(snapshot.view.splitView));
+  splitToggleButton.dataset.state = snapshot.view.splitView ? "on" : "off";
   splitToggleButton.textContent = snapshot.view.splitView ? "Split On" : "Split Off";
 
   setModuleCardState(moduleCards.primary, snapshot.modules.primary);
@@ -1675,147 +1808,117 @@ function drawPreviewComposite(snapshot = readSnapshot()) {
   }
 
   previewCtx.putImageData(state.displayImageData, 0, 0);
+}
 
-  const lineWidth = Math.max(1.5, width / 700);
-  previewCtx.strokeStyle = "#ffffff";
-  previewCtx.lineWidth = lineWidth;
-  previewCtx.beginPath();
-  previewCtx.moveTo(splitColumn + 0.5, 0);
-  previewCtx.lineTo(splitColumn + 0.5, height);
-  previewCtx.stroke();
+function ensureHistogramBaseCanvas(width, height) {
+  if (state.histogramBaseCanvas?.width === width && state.histogramBaseCanvas?.height === height) {
+    return state.histogramBaseCanvas;
+  }
 
-  const handleSize = Math.max(16, width * 0.02);
-  const handleX = clamp(splitColumn - (handleSize * 0.5), 10, width - handleSize - 10);
-  const handleY = clamp((height * 0.5) - (handleSize * 0.5), 10, height - handleSize - 10);
-  previewCtx.fillStyle = "#000000";
-  previewCtx.strokeStyle = "#ffffff";
-  previewCtx.fillRect(handleX, handleY, handleSize, handleSize);
-  previewCtx.strokeRect(handleX, handleY, handleSize, handleSize);
+  const baseCanvas = document.createElement("canvas");
+  baseCanvas.width = width;
+  baseCanvas.height = height;
+  const ctx = baseCanvas.getContext("2d");
+  const chartLeft = 26;
+  const chartTop = 18;
+  const chartRight = width - 16;
+  const chartBottom = height - 28;
+  const chartWidth = chartRight - chartLeft;
+  const chartHeight = chartBottom - chartTop;
+
+  const background = ctx.createLinearGradient(0, 0, 0, height);
+  background.addColorStop(0, "#08131f");
+  background.addColorStop(0.48, "#050d17");
+  background.addColorStop(1, "#030812");
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+
+  const glow = ctx.createRadialGradient(chartLeft + (chartWidth * 0.5), chartTop, 10, chartLeft + (chartWidth * 0.5), chartTop, chartWidth * 0.9);
+  glow.addColorStop(0, "rgba(121, 221, 255, 0.16)");
+  glow.addColorStop(1, "rgba(121, 221, 255, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(chartLeft, chartTop, chartWidth, chartHeight);
+
+  [
+    { start: 0, end: 0.25, fill: "rgba(79, 128, 255, 0.08)" },
+    { start: 0.25, end: 0.75, fill: "rgba(121, 221, 255, 0.04)" },
+    { start: 0.75, end: 1, fill: "rgba(255, 186, 92, 0.08)" },
+  ].forEach((zone) => {
+    const x = chartLeft + (zone.start * chartWidth);
+    const widthValue = (zone.end - zone.start) * chartWidth;
+    ctx.fillStyle = zone.fill;
+    ctx.fillRect(x, chartTop, widthValue, chartHeight);
+  });
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(chartLeft, chartTop, chartWidth, chartHeight);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(121, 221, 255, 0.06)";
+  ctx.lineWidth = 1;
+  for (let offset = -chartHeight; offset < chartWidth; offset += 18) {
+    ctx.beginPath();
+    ctx.moveTo(chartLeft + offset, chartBottom);
+    ctx.lineTo(chartLeft + offset + (chartHeight * 0.38), chartTop);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = "rgba(121, 221, 255, 0.08)";
+  ctx.lineWidth = 0.75;
+  for (let index = 0; index <= 4; index += 1) {
+    const y = chartTop + ((chartHeight / 4) * index);
+    ctx.beginPath();
+    ctx.moveTo(chartLeft, y);
+    ctx.lineTo(chartRight, y);
+    ctx.stroke();
+
+    const x = chartLeft + ((chartWidth / 4) * index);
+    ctx.beginPath();
+    ctx.moveTo(x, chartTop);
+    ctx.lineTo(x, chartBottom);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "rgba(121, 221, 255, 0.14)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(chartLeft, chartTop, chartWidth, chartHeight);
+
+  ctx.fillStyle = "rgba(199, 227, 245, 0.64)";
+  ctx.font = '10px "SF Mono", "Roboto Mono", monospace';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  [0, 25, 50, 75, 100].forEach((value) => {
+    const x = chartLeft + ((value / 100) * chartWidth);
+    ctx.fillText(String(value), x, chartBottom + 7);
+  });
+  ctx.textAlign = "right";
+  ctx.fillText("IRE", chartRight, chartTop - 12);
+
+  state.histogramBaseCanvas = baseCanvas;
+  return baseCanvas;
 }
 
 function drawHistogram(histogram, details) {
   const width = histogramCanvas.width;
   const height = histogramCanvas.height;
-  const frontLeft = 74;
-  const frontRight = width - 28;
-  const floorBottom = height - 40;
-  const frontTop = 54;
-  const depthX = 72;
-  const depthY = 38;
-  const chartWidth = frontRight - frontLeft;
-  const chartHeight = floorBottom - frontTop;
-  const maxDepth = 0.94;
+  const chartLeft = 26;
+  const chartTop = 18;
+  const chartRight = width - 16;
+  const chartBottom = height - 28;
+  const chartWidth = chartRight - chartLeft;
+  const chartHeight = chartBottom - chartTop;
 
   histogramCtx.clearRect(0, 0, width, height);
-  histogramCtx.fillStyle = "#050505";
-  histogramCtx.fillRect(0, 0, width, height);
+  histogramCtx.drawImage(ensureHistogramBaseCanvas(width, height), 0, 0);
 
-  function projectPoint(xNorm, yNorm, zNorm) {
-    return {
-      x: frontLeft + (xNorm * chartWidth) - (zNorm * depthX),
-      y: floorBottom - (yNorm * chartHeight) - (zNorm * depthY),
-    };
-  }
-
-  function fillQuad(points, fillStyle) {
-    histogramCtx.beginPath();
-    histogramCtx.moveTo(points[0].x, points[0].y);
-    for (let index = 1; index < points.length; index += 1) {
-      histogramCtx.lineTo(points[index].x, points[index].y);
-    }
-    histogramCtx.closePath();
-    histogramCtx.fillStyle = fillStyle;
-    histogramCtx.fill();
-  }
-
-  function strokePath(points, strokeStyle, lineWidthValue, closePath = false) {
-    histogramCtx.beginPath();
-    histogramCtx.moveTo(points[0].x, points[0].y);
-    for (let index = 1; index < points.length; index += 1) {
-      histogramCtx.lineTo(points[index].x, points[index].y);
-    }
-    if (closePath) {
-      histogramCtx.closePath();
-    }
-    histogramCtx.strokeStyle = strokeStyle;
-    histogramCtx.lineWidth = lineWidthValue;
-    histogramCtx.stroke();
-  }
-
-  const floorPlane = [
-    projectPoint(0, 0, 0),
-    projectPoint(1, 0, 0),
-    projectPoint(1, 0, maxDepth),
-    projectPoint(0, 0, maxDepth),
-  ];
-  const backPlane = [
-    projectPoint(0, 0, maxDepth),
-    projectPoint(1, 0, maxDepth),
-    projectPoint(1, 1, maxDepth),
-    projectPoint(0, 1, maxDepth),
-  ];
-  const leftPlane = [
-    projectPoint(0, 0, 0),
-    projectPoint(0, 1, 0),
-    projectPoint(0, 1, maxDepth),
-    projectPoint(0, 0, maxDepth),
-  ];
-
-  fillQuad(floorPlane, "#060606");
-  fillQuad(backPlane, "#0a0a0a");
-  fillQuad(leftPlane, "#080808");
-
-  const zoneFills = [
-    { start: 0, end: 0.25, color: "rgba(75, 112, 255, 0.06)" },
-    { start: 0.25, end: 0.75, color: "rgba(255, 255, 255, 0.03)" },
-    { start: 0.75, end: 1, color: "rgba(255, 168, 72, 0.06)" },
-  ];
-
-  zoneFills.forEach((zone) => {
-    fillQuad([
-      projectPoint(zone.start, 0, 0),
-      projectPoint(zone.end, 0, 0),
-      projectPoint(zone.end, 0, maxDepth),
-      projectPoint(zone.start, 0, maxDepth),
-    ], zone.color);
-    fillQuad([
-      projectPoint(zone.start, 0, maxDepth),
-      projectPoint(zone.end, 0, maxDepth),
-      projectPoint(zone.end, 1, maxDepth),
-      projectPoint(zone.start, 1, maxDepth),
-    ], zone.color.replace("0.06", "0.04").replace("0.03", "0.025"));
-  });
-
-  histogramCtx.strokeStyle = "rgba(255,255,255,0.075)";
-  histogramCtx.lineWidth = 0.7;
-  for (let index = 0; index <= 4; index += 1) {
-    const yNorm = index / 4;
-    strokePath([
-      projectPoint(0, yNorm, 0),
-      projectPoint(1, yNorm, 0),
-      projectPoint(1, yNorm, maxDepth),
-      projectPoint(0, yNorm, maxDepth),
-    ], "rgba(255,255,255,0.075)", 0.7, true);
-
-    const xNorm = index / 4;
-    strokePath([
-      projectPoint(xNorm, 0, 0),
-      projectPoint(xNorm, 1, 0),
-    ], "rgba(255,255,255,0.065)", 0.7);
-    strokePath([
-      projectPoint(xNorm, 0, maxDepth),
-      projectPoint(xNorm, 1, maxDepth),
-    ], "rgba(255,255,255,0.055)", 0.65);
-  }
-
-  for (let index = 1; index <= 4; index += 1) {
-    const zNorm = (index / 4) * maxDepth;
-    strokePath([
-      projectPoint(0, 0, zNorm),
-      projectPoint(1, 0, zNorm),
-      projectPoint(1, 1, zNorm),
-      projectPoint(0, 1, zNorm),
-    ], "rgba(255,255,255,0.05)", 0.55, true);
+  if (!details.sampleCount) {
+    histogramCtx.fillStyle = "rgba(243, 251, 255, 0.72)";
+    histogramCtx.font = '11px "SF Mono", "Roboto Mono", monospace';
+    histogramCtx.textAlign = "center";
+    histogramCtx.textBaseline = "middle";
+    histogramCtx.fillText("No sampled pixels", chartLeft + (chartWidth * 0.5), chartTop + (chartHeight * 0.5));
+    return;
   }
 
   const maximum = Math.max(
@@ -1826,132 +1929,208 @@ function drawHistogram(histogram, details) {
     ...histogram.luma,
   );
 
-  function strokeTraceOnDepth(values, color, lineWidthValue, zNorm) {
+  function tracePoint(values, index) {
+    return {
+      x: chartLeft + ((index / (values.length - 1)) * chartWidth),
+      y: chartBottom - ((values[index] / maximum) * chartHeight),
+    };
+  }
+
+  function beginTrace(values) {
     histogramCtx.beginPath();
-    values.forEach((value, index) => {
-      const point = projectPoint(index / (values.length - 1), value / maximum, zNorm);
+    for (let index = 0; index < values.length; index += 1) {
+      const point = tracePoint(values, index);
       if (index === 0) {
         histogramCtx.moveTo(point.x, point.y);
       } else {
         histogramCtx.lineTo(point.x, point.y);
       }
-    });
-    histogramCtx.strokeStyle = color;
+    }
+  }
+
+  histogramCtx.save();
+  histogramCtx.beginPath();
+  histogramCtx.moveTo(chartLeft, chartBottom);
+  for (let index = 0; index < histogram.luma.length; index += 1) {
+    const point = tracePoint(histogram.luma, index);
+    histogramCtx.lineTo(point.x, point.y);
+  }
+  histogramCtx.lineTo(chartRight, chartBottom);
+  histogramCtx.closePath();
+  const lumaFill = histogramCtx.createLinearGradient(0, chartTop, 0, chartBottom);
+  lumaFill.addColorStop(0, "rgba(222, 250, 255, 0.28)");
+  lumaFill.addColorStop(0.65, "rgba(121, 221, 255, 0.12)");
+  lumaFill.addColorStop(1, "rgba(121, 221, 255, 0.02)");
+  histogramCtx.fillStyle = lumaFill;
+  histogramCtx.fill();
+  histogramCtx.restore();
+
+  function strokeTrace(values, strokeStyle, shadowColor, glowWidth, lineWidthValue) {
+    beginTrace(values);
+    histogramCtx.lineJoin = "round";
+    histogramCtx.lineCap = "round";
+    histogramCtx.strokeStyle = shadowColor;
+    histogramCtx.lineWidth = glowWidth;
+    histogramCtx.shadowColor = shadowColor;
+    histogramCtx.shadowBlur = 14;
+    histogramCtx.stroke();
+    histogramCtx.shadowBlur = 0;
+    histogramCtx.strokeStyle = strokeStyle;
     histogramCtx.lineWidth = lineWidthValue;
     histogramCtx.stroke();
   }
 
-  histogram.luma.forEach((value, index) => {
-    const x0Norm = index / histogram.luma.length;
-    const x1Norm = (index + 0.86) / histogram.luma.length;
-    const yNorm = value / maximum;
-    const depthNorm = maxDepth * (0.82 + (yNorm * 0.16));
-    const tone = 0.12 + ((index / (histogram.luma.length - 1)) * 0.3);
+  strokeTrace(histogram.red, "rgba(255, 104, 108, 0.9)", "rgba(255, 104, 108, 0.36)", 3.2, 1);
+  strokeTrace(histogram.green, "rgba(122, 255, 168, 0.9)", "rgba(122, 255, 168, 0.34)", 3.2, 1);
+  strokeTrace(histogram.blue, "rgba(112, 170, 255, 0.9)", "rgba(112, 170, 255, 0.34)", 3.2, 1);
+  strokeTrace(histogram.luma, "rgba(240, 250, 255, 0.98)", "rgba(217, 251, 255, 0.38)", 4.4, 1.35);
 
-    fillQuad([
-      projectPoint(x0Norm, 0, 0),
-      projectPoint(x1Norm, 0, 0),
-      projectPoint(x1Norm, yNorm, 0),
-      projectPoint(x0Norm, yNorm, 0),
-    ], `rgba(255,255,255,${0.035 + (yNorm * 0.06)})`);
-
-    fillQuad([
-      projectPoint(x0Norm, yNorm, 0),
-      projectPoint(x1Norm, yNorm, 0),
-      projectPoint(x1Norm, yNorm, depthNorm),
-      projectPoint(x0Norm, yNorm, depthNorm),
-    ], `rgba(255,255,255,${0.08 + tone})`);
-
-    fillQuad([
-      projectPoint(x1Norm, 0, 0),
-      projectPoint(x1Norm, yNorm, 0),
-      projectPoint(x1Norm, yNorm, depthNorm),
-      projectPoint(x1Norm, 0, depthNorm),
-    ], "rgba(255,255,255,0.045)");
-
-    strokePath([
-      projectPoint(x0Norm, yNorm, depthNorm),
-      projectPoint(x1Norm, yNorm, depthNorm),
-    ], "rgba(255,255,255,0.09)", 0.45);
-  });
-
-  strokeTraceOnDepth(histogram.red, "rgba(255, 82, 82, 0.78)", 0.72, maxDepth * 0.18);
-  strokeTraceOnDepth(histogram.green, "rgba(82, 255, 120, 0.78)", 0.72, maxDepth * 0.42);
-  strokeTraceOnDepth(histogram.blue, "rgba(82, 150, 255, 0.78)", 0.72, maxDepth * 0.66);
-  strokeTraceOnDepth(histogram.luma, "rgba(255,255,255,0.86)", 0.9, maxDepth * 0.9);
-
-  strokePath([
-    projectPoint(0, 0, 0),
-    projectPoint(1, 0, 0),
-    projectPoint(1, 1, 0),
-    projectPoint(0, 1, 0),
-  ], "rgba(255,255,255,0.14)", 0.8, true);
-  strokePath([
-    projectPoint(0, 0, maxDepth),
-    projectPoint(1, 0, maxDepth),
-    projectPoint(1, 1, maxDepth),
-    projectPoint(0, 1, maxDepth),
-  ], "rgba(255,255,255,0.14)", 0.8, true);
-  strokePath([
-    projectPoint(0, 0, 0),
-    projectPoint(0, 0, maxDepth),
-    projectPoint(0, 1, maxDepth),
-    projectPoint(0, 1, 0),
-  ], "rgba(255,255,255,0.11)", 0.75, true);
-  strokePath([
-    projectPoint(1, 0, 0),
-    projectPoint(1, 0, maxDepth),
-    projectPoint(1, 1, maxDepth),
-    projectPoint(1, 1, 0),
-  ], "rgba(255,255,255,0.11)", 0.75, true);
-
+  histogramCtx.save();
+  histogramCtx.setLineDash([4, 4]);
   [
-    { label: "P10", value: details.p10, color: "rgba(120, 170, 255, 0.65)" },
-    { label: "P50", value: details.median, color: "rgba(255,255,255,0.75)" },
-    { label: "P90", value: details.p90, color: "rgba(255, 180, 90, 0.7)" },
-    { label: "Peak", value: details.peak, color: "rgba(90, 255, 170, 0.55)" },
+    { label: "P10", value: details.p10, color: "rgba(124, 174, 255, 0.86)" },
+    { label: "P50", value: details.median, color: "rgba(240, 250, 255, 0.88)" },
+    { label: "P90", value: details.p90, color: "rgba(255, 187, 103, 0.88)" },
+    { label: "Peak", value: details.peak, color: "rgba(120, 255, 194, 0.82)" },
   ].forEach((marker) => {
-    const xNorm = marker.value;
-    fillQuad([
-      projectPoint(xNorm, 0, 0),
-      projectPoint(xNorm, 1, 0),
-      projectPoint(xNorm, 1, maxDepth),
-      projectPoint(xNorm, 0, maxDepth),
-    ], marker.color.replace(/0\.\d+\)/, "0.06)"));
-    strokePath([
-      projectPoint(xNorm, 0, 0),
-      projectPoint(xNorm, 1, 0),
-      projectPoint(xNorm, 1, maxDepth),
-      projectPoint(xNorm, 0, maxDepth),
-    ], marker.color, 0.75, true);
+    const x = chartLeft + (clampUnit(marker.value) * chartWidth);
+    histogramCtx.strokeStyle = marker.color;
+    histogramCtx.lineWidth = 0.9;
+    histogramCtx.beginPath();
+    histogramCtx.moveTo(x, chartTop);
+    histogramCtx.lineTo(x, chartBottom);
+    histogramCtx.stroke();
 
-    const labelPoint = projectPoint(xNorm, 1, maxDepth);
-    const labelX = clamp(labelPoint.x, 24, width - 24);
-
-    histogramCtx.fillStyle = "#000000";
-    histogramCtx.fillRect(labelX - 16, 10, 32, 14);
+    const labelX = clamp(x, 26, width - 26);
+    histogramCtx.fillStyle = "rgba(4, 10, 18, 0.88)";
+    histogramCtx.fillRect(labelX - 16, 6, 32, 14);
     histogramCtx.strokeStyle = marker.color;
     histogramCtx.lineWidth = 0.8;
-    histogramCtx.strokeRect(labelX - 16, 10, 32, 14);
-    histogramCtx.fillStyle = "#ffffff";
+    histogramCtx.strokeRect(labelX - 16, 6, 32, 14);
+    histogramCtx.fillStyle = "#f3fbff";
     histogramCtx.font = '10px "SF Mono", "Roboto Mono", monospace';
     histogramCtx.textAlign = "center";
     histogramCtx.textBaseline = "middle";
-    histogramCtx.fillText(marker.label, labelX, 17);
+    histogramCtx.fillText(marker.label, labelX, 13);
   });
+  histogramCtx.restore();
+}
 
-  histogramCtx.fillStyle = "rgba(255,255,255,0.75)";
-  histogramCtx.font = '10px "SF Mono", "Roboto Mono", monospace';
-  histogramCtx.textAlign = "center";
-  histogramCtx.textBaseline = "top";
-  [0, 25, 50, 75, 100].forEach((value) => {
-    const point = projectPoint(value / 100, 0, 0);
-    histogramCtx.fillText(String(value), point.x, floorBottom + 8);
-  });
+function clearScheduledHistogramRender() {
+  if (state.histogramDebounceTimer) {
+    window.clearTimeout(state.histogramDebounceTimer);
+    state.histogramDebounceTimer = 0;
+  }
 
-  histogramCtx.textAlign = "left";
-  histogramCtx.fillText("IRE", frontRight + 8, floorBottom + 8);
-  histogramCtx.fillText("Z", projectPoint(1, 0, maxDepth).x + 10, projectPoint(1, 0, maxDepth).y - 8);
+  if (state.histogramIdleCallbackId && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(state.histogramIdleCallbackId);
+    state.histogramIdleCallbackId = 0;
+  }
+}
+
+function buildHistogramFromGradedImage() {
+  const histogram = state.histogramBuffer;
+  resetHistogramBuffer(histogram);
+
+  const samples = {
+    sampleCount: 0,
+    lumaSum: 0,
+    shadows: 0,
+    mids: 0,
+    highlights: 0,
+    clipBlack: 0,
+    clipWhite: 0,
+  };
+
+  if (!state.gradedImageData) {
+    return { histogram, details: computeHistogramDetails(histogram, samples) };
+  }
+
+  const pixels = state.gradedImageData.data;
+  const pixelCount = pixels.length / 4;
+  const sampleStride = Math.max(1, Math.floor(pixelCount / HISTOGRAM_TARGET_SAMPLES));
+  const normalizedBinScale = HISTOGRAM_BINS - 1;
+  const toUnit = 1 / 255;
+  let sampleCounter = 0;
+
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    if (pixels[offset + 3] > SOURCE_ALPHA_THRESHOLD && sampleCounter === 0) {
+      const red = pixels[offset] * toUnit;
+      const green = pixels[offset + 1] * toUnit;
+      const blue = pixels[offset + 2] * toUnit;
+      const lumaValue = luma709(red, green, blue);
+
+      histogram.red[Math.min(normalizedBinScale, Math.floor(red * normalizedBinScale))] += 1;
+      histogram.green[Math.min(normalizedBinScale, Math.floor(green * normalizedBinScale))] += 1;
+      histogram.blue[Math.min(normalizedBinScale, Math.floor(blue * normalizedBinScale))] += 1;
+      histogram.luma[Math.min(normalizedBinScale, Math.floor(lumaValue * normalizedBinScale))] += 1;
+
+      samples.sampleCount += 1;
+      samples.lumaSum += lumaValue;
+      if (lumaValue < 0.25) {
+        samples.shadows += 1;
+      } else if (lumaValue < 0.75) {
+        samples.mids += 1;
+      } else {
+        samples.highlights += 1;
+      }
+      if (lumaValue <= 0.02) {
+        samples.clipBlack += 1;
+      }
+      if (lumaValue >= 0.98) {
+        samples.clipWhite += 1;
+      }
+    }
+
+    sampleCounter += 1;
+    if (sampleCounter >= sampleStride) {
+      sampleCounter = 0;
+    }
+  }
+
+  return {
+    histogram,
+    details: computeHistogramDetails(histogram, samples),
+  };
+}
+
+function renderHistogramFromGradedImage(requestId) {
+  if (!state.gradedImageData || requestId !== state.histogramRequestId) {
+    return;
+  }
+
+  const { histogram, details } = buildHistogramFromGradedImage();
+  if (requestId !== state.histogramRequestId) {
+    return;
+  }
+
+  histogramSummaryText.textContent = `2D scope | ${HISTOGRAM_BINS} bins | ${details.sampleCount.toLocaleString()} samples | peak ${formatIre(details.peak)}`;
+  updateHistogramMetrics(details);
+  drawHistogram(histogram, details);
+}
+
+function scheduleHistogramRender() {
+  if (!state.gradedImageData) {
+    return;
+  }
+
+  const requestId = ++state.histogramRequestId;
+  clearScheduledHistogramRender();
+  histogramSummaryText.textContent = "2D scope | refreshing...";
+
+  state.histogramDebounceTimer = window.setTimeout(() => {
+    state.histogramDebounceTimer = 0;
+
+    if (typeof window.requestIdleCallback === "function") {
+      state.histogramIdleCallbackId = window.requestIdleCallback(() => {
+        state.histogramIdleCallbackId = 0;
+        renderHistogramFromGradedImage(requestId);
+      }, { timeout: HISTOGRAM_DEBOUNCE_MS + 60 });
+      return;
+    }
+
+    renderHistogramFromGradedImage(requestId);
+  }, HISTOGRAM_DEBOUNCE_MS);
 }
 
 function renderProcessedPreview() {
@@ -1971,25 +2150,6 @@ function renderProcessedPreview() {
   }
 
   const gradedPixels = state.gradedImageData.data;
-  const histogram = {
-    red: new Uint32Array(HISTOGRAM_BINS),
-    green: new Uint32Array(HISTOGRAM_BINS),
-    blue: new Uint32Array(HISTOGRAM_BINS),
-    luma: new Uint32Array(HISTOGRAM_BINS),
-  };
-  const histogramSamples = {
-    sampleCount: 0,
-    lumaSum: 0,
-    shadows: 0,
-    mids: 0,
-    highlights: 0,
-    clipBlack: 0,
-    clipWhite: 0,
-  };
-
-  const pixelCount = sourcePixels.length / 4;
-  const sampleStride = Math.max(1, Math.floor(pixelCount / HISTOGRAM_TARGET_SAMPLES));
-  let sampleCounter = 0;
 
   for (let offset = 0; offset < sourcePixels.length; offset += 4) {
     const alpha = sourcePixels[offset + 3];
@@ -2003,46 +2163,10 @@ function renderProcessedPreview() {
     gradedPixels[offset + 1] = green;
     gradedPixels[offset + 2] = blue;
     gradedPixels[offset + 3] = alpha;
-
-    if (alpha > SOURCE_ALPHA_THRESHOLD && sampleCounter === 0) {
-      const redBin = Math.min(HISTOGRAM_BINS - 1, Math.floor((red / 255) * (HISTOGRAM_BINS - 1)));
-      const greenBin = Math.min(HISTOGRAM_BINS - 1, Math.floor((green / 255) * (HISTOGRAM_BINS - 1)));
-      const blueBin = Math.min(HISTOGRAM_BINS - 1, Math.floor((blue / 255) * (HISTOGRAM_BINS - 1)));
-      const lumaValue = luma709(red / 255, green / 255, blue / 255);
-      const lumaBin = Math.min(HISTOGRAM_BINS - 1, Math.floor(lumaValue * (HISTOGRAM_BINS - 1)));
-      histogram.red[redBin] += 1;
-      histogram.green[greenBin] += 1;
-      histogram.blue[blueBin] += 1;
-      histogram.luma[lumaBin] += 1;
-
-      histogramSamples.sampleCount += 1;
-      histogramSamples.lumaSum += lumaValue;
-      if (lumaValue < 0.25) {
-        histogramSamples.shadows += 1;
-      } else if (lumaValue < 0.75) {
-        histogramSamples.mids += 1;
-      } else {
-        histogramSamples.highlights += 1;
-      }
-      if (lumaValue <= 0.02) {
-        histogramSamples.clipBlack += 1;
-      }
-      if (lumaValue >= 0.98) {
-        histogramSamples.clipWhite += 1;
-      }
-    }
-
-    sampleCounter += 1;
-    if (sampleCounter >= sampleStride) {
-      sampleCounter = 0;
-    }
   }
 
-  const histogramDetails = computeHistogramDetails(histogram, histogramSamples);
-  histogramSummaryText.textContent = `3D scope | ${HISTOGRAM_BINS} bins | ${histogramDetails.sampleCount.toLocaleString()} samples | peak ${formatIre(histogramDetails.peak)}`;
-  updateHistogramMetrics(histogramDetails);
-  drawHistogram(histogram, histogramDetails);
   drawPreviewComposite(snapshot);
+  scheduleHistogramRender();
 }
 
 function scheduleRender() {
@@ -2064,6 +2188,8 @@ function updateSourceMeta() {
 
 function installSource(drawable, sourceName, naturalWidth, naturalHeight) {
   const fitted = fitPreviewDimensions(naturalWidth, naturalHeight);
+  clearScheduledHistogramRender();
+  state.histogramRequestId += 1;
   previewCanvas.width = fitted.width;
   previewCanvas.height = fitted.height;
 
@@ -2582,6 +2708,7 @@ function bindActionInputs() {
 function init() {
   populateConversionLutSelect();
   populateFilterLutSelect();
+  bindPanelToggles();
   bindWheelInputs();
   bindCurveInputs();
   applySnapshot(DEFAULT_SNAPSHOT);

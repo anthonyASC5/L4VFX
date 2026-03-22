@@ -7,17 +7,23 @@
     <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
     <style>
       :root {
-        --bg: #000000;
-        --bg-soft: #090909;
-        --panel: #0d0d0d;
-        --panel-alt: #121212;
-        --line: #2e2e2e;
-        --line-strong: #626262;
-        --text: #ffffff;
-        --text-soft: #d4d4d4;
-        --text-muted: #8c8c8c;
-        --control: #050505;
-        --control-active: #1d1d1d;
+        --bg: #050505;
+        --bg-soft: #0d0d0d;
+        --panel: rgba(12, 12, 12, 0.96);
+        --panel-alt: rgba(18, 18, 18, 0.94);
+        --panel-strong: rgba(8, 8, 8, 0.98);
+        --line: rgba(255, 255, 255, 0.08);
+        --line-strong: rgba(255, 255, 255, 0.18);
+        --text: #f1f1f1;
+        --text-soft: rgba(241, 241, 241, 0.84);
+        --text-muted: rgba(184, 184, 184, 0.56);
+        --control: rgba(16, 16, 16, 0.96);
+        --control-active: rgba(26, 26, 26, 0.98);
+        --accent: #c9c9c9;
+        --accent-strong: #ffffff;
+        --accent-green: #8cffb8;
+        --accent-red: #ff6f76;
+        --shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
       }
 
       * {
@@ -28,15 +34,29 @@
       body {
         margin: 0;
         min-height: 100%;
-        background: var(--bg);
+        background: linear-gradient(180deg, #121212 0%, #080808 44%, #040404 100%);
         color: var(--text);
-        font-family: "Helvetica Neue", "Segoe UI", Arial, sans-serif;
-        font-size: 12px;
-        line-height: 1.35;
+        font-family: "Avenir Next", "SF Pro Display", "Segoe UI Variable", "Segoe UI", sans-serif;
+        font-size: 11.5px;
+        line-height: 1.4;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
       }
 
       body {
         position: relative;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0, transparent 14%, transparent 86%, rgba(255, 255, 255, 0.025) 100%),
+          repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0, rgba(255, 255, 255, 0.018) 1px, transparent 1px, transparent 48px);
+        opacity: 0.14;
+        pointer-events: none;
       }
 
       body .site-home-logo {
@@ -51,65 +71,68 @@
         color: inherit;
       }
 
-      button,
-      select,
-      input[type="text"],
-      input[type="number"] {
-        border-radius: 0;
-      }
-
       .app {
+        position: relative;
         min-height: 100vh;
-        padding: 8px;
+        padding: 12px;
       }
 
       .shell {
-        width: min(1880px, 100%);
+        width: min(1760px, 100%);
         margin: 0 auto;
         border: 1px solid var(--line);
-        background: var(--panel);
+        border-radius: 0;
+        overflow: hidden;
+        background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(10, 10, 10, 0.99));
+        box-shadow: var(--shadow);
+        backdrop-filter: none;
       }
 
       .topbar {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;
-        gap: 10px;
+        gap: 12px;
         align-items: center;
-        padding: 8px 10px;
+        padding: 12px 14px;
         border-bottom: 1px solid var(--line);
-        background: #050505;
+        background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(14, 14, 14, 0.98));
       }
 
       .brand {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         min-width: 0;
       }
 
       .brand-mark {
-        width: 18px;
-        height: 18px;
-        border: 1px solid var(--text);
         position: relative;
         flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 0;
+        background: rgba(8, 8, 8, 0.98);
+        box-shadow: none;
       }
 
       .brand-mark::before,
       .brand-mark::after {
         content: "";
         position: absolute;
-        background: var(--text);
+        background: var(--accent-strong);
       }
 
       .brand-mark::before {
-        inset: 4px auto 4px 8px;
+        inset: 5px auto 5px 10px;
         width: 1px;
+        box-shadow: none;
       }
 
       .brand-mark::after {
-        inset: 8px 4px auto 4px;
+        inset: 10px 5px auto 5px;
         height: 1px;
+        box-shadow: none;
       }
 
       .brand-copy {
@@ -124,8 +147,10 @@
       .mode-tab,
       .button,
       .metric-label,
-      .status-label {
-        letter-spacing: 0.08em;
+      .status-label,
+      .scope-head strong,
+      .panel-toggle-text {
+        letter-spacing: 0.11em;
         text-transform: uppercase;
       }
 
@@ -160,6 +185,11 @@
       .panel,
       .subpanel,
       .preview-frame,
+      .scope-frame,
+      .wheel-card,
+      .curve-card,
+      .wheel-canvas,
+      .curve-canvas,
       #histogram-canvas,
       #preview-canvas {
         border-radius: 0;
@@ -168,86 +198,111 @@
       .mode-tab,
       .button,
       .field,
-      select {
+      select,
+      .panel-toggle {
         border: 1px solid var(--line);
-        background: var(--control);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+          var(--control);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
       }
 
       .mode-tab,
-      .button {
+      .button,
+      .panel-toggle {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-height: 28px;
-        padding: 0 10px;
+        gap: 8px;
+        min-height: 32px;
+        padding: 0 12px;
         color: var(--text-soft);
         text-decoration: none;
         cursor: pointer;
-        transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+        transition:
+          background 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease,
+          box-shadow 0.16s ease,
+          transform 0.16s ease;
       }
 
       .mode-tab:hover,
       .button:hover,
       .field:hover,
-      select:hover {
+      select:hover,
+      .panel-toggle:hover {
         border-color: var(--line-strong);
-        background: var(--control-active);
+        background:
+          linear-gradient(180deg, rgba(121, 221, 255, 0.08), transparent 44%),
+          var(--control-active);
+      }
+
+      .mode-tab:active,
+      .button:active,
+      .panel-toggle:active {
+        transform: scale(0.985);
       }
 
       .mode-tab.active,
       .button.active {
-        color: var(--text);
-        border-color: var(--text);
+        color: var(--accent-strong);
+        border-color: rgba(121, 221, 255, 0.48);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.06),
+          0 0 16px rgba(121, 221, 255, 0.12);
       }
 
-      .topbar-actions {
+      .topbar-actions,
+      .panel-head-actions {
         display: flex;
         gap: 6px;
+        align-items: center;
         justify-content: flex-end;
         flex-wrap: wrap;
       }
 
       .workspace {
         display: grid;
-        grid-template-columns: minmax(0, 1.45fr) 460px;
-        min-height: calc(100vh - 74px);
+        grid-template-columns: minmax(0, 1.38fr) 352px;
+        gap: 10px;
+        min-height: calc(100vh - 88px);
+        padding: 10px;
       }
 
-      .stage {
-        min-width: 0;
-        padding: 8px;
-        border-right: 1px solid var(--line);
-        display: grid;
-        gap: 8px;
-        align-content: start;
-      }
-
+      .stage,
       .sidebar {
         min-width: 0;
-        padding: 8px;
         display: grid;
-        gap: 8px;
+        gap: 10px;
         align-content: start;
       }
 
       .panel {
         border: 1px solid var(--line);
-        background: var(--panel-alt);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 24%),
+          var(--panel-alt);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.03),
+          0 12px 28px rgba(0, 0, 0, 0.14);
+        overflow: hidden;
       }
 
       .panel-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
-        padding: 8px 10px;
+        gap: 10px;
+        padding: 11px 12px;
         border-bottom: 1px solid var(--line);
-        background: #080808;
+        background:
+          linear-gradient(180deg, rgba(18, 36, 60, 0.86), rgba(7, 18, 32, 0.92));
       }
 
       .panel-head strong {
         display: block;
-        font-size: 0.72rem;
+        font-size: 0.7rem;
         font-weight: 700;
       }
 
@@ -257,7 +312,39 @@
       }
 
       .panel-body {
-        padding: 8px;
+        padding: 10px;
+      }
+
+      .panel.is-collapsible[data-collapsed="true"] .panel-body {
+        display: none;
+      }
+
+      .panel.is-collapsible[data-collapsed="true"] .panel-head {
+        border-bottom-color: transparent;
+      }
+
+      .panel-toggle {
+        min-width: 72px;
+        min-height: 28px;
+        padding: 0 10px;
+      }
+
+      .panel-toggle::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: rotate(45deg) translateY(-1px);
+        transition: transform 0.18s ease;
+      }
+
+      .panel[data-collapsed="false"] .panel-toggle::before {
+        transform: rotate(225deg) translateY(-1px);
+      }
+
+      .panel-toggle-text {
+        font-size: 0.62rem;
       }
 
       .stage-meta {
@@ -267,15 +354,22 @@
       }
 
       .metric {
-        border: 1px solid var(--line);
-        background: #060606;
-        padding: 7px 8px;
         min-width: 0;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 34%),
+          rgba(5, 13, 24, 0.88);
+        padding: 8px 9px;
       }
 
       .metric-label {
         color: var(--text-muted);
-        font-size: 0.64rem;
+        font-size: 0.62rem;
+      }
+
+      .metric-value,
+      .field-output {
+        font-variant-numeric: tabular-nums;
       }
 
       .metric-value {
@@ -284,7 +378,7 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        font-size: 0.82rem;
+        font-size: 0.8rem;
       }
 
       .stage-actions {
@@ -293,22 +387,84 @@
         gap: 6px;
       }
 
-      .preview-frame {
+      .source-layout {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+      }
+
+      .scope-column,
+      .preview-column {
+        display: grid;
+        gap: 10px;
+      }
+
+      .scope-frame {
         border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 10px;
         background:
-          linear-gradient(45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
-          linear-gradient(45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
-          #020202;
-        background-size: 16px 16px, 16px 16px, auto;
-        background-position: 0 0, 8px 8px, center;
+          linear-gradient(180deg, rgba(121, 221, 255, 0.05), transparent 24%),
+          linear-gradient(180deg, rgba(6, 16, 29, 0.96), rgba(4, 12, 21, 0.98));
+      }
+
+      .scope-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .scope-head strong {
+        display: block;
+        font-size: 0.66rem;
+      }
+
+      .scope-head span {
+        display: block;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+      }
+
+      #histogram-summary {
+        max-width: 130px;
+        text-align: right;
+        font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
+        font-size: 0.62rem;
+        letter-spacing: 0.04em;
+      }
+
+      .preview-frame {
+        position: relative;
+        border: 1px solid var(--line);
+        padding: 10px;
+        background:
+          linear-gradient(135deg, rgba(121, 221, 255, 0.05), transparent 32%),
+          linear-gradient(45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.02) 75%),
+          linear-gradient(45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.02) 75%),
+          rgba(3, 8, 14, 0.98);
+        background-size: auto, 16px 16px, 16px 16px;
+        background-position: center, 0 0, 8px 8px;
+      }
+
+      .preview-frame::before {
+        content: "";
+        position: absolute;
+        inset: 10px;
+        border: 1px solid rgba(121, 221, 255, 0.12);
+        border-radius: 10px;
+        pointer-events: none;
       }
 
       #preview-canvas {
         display: block;
         width: 100%;
         height: auto;
-        max-height: 68vh;
+        max-height: 62vh;
         background: transparent;
+        border-radius: 10px;
       }
 
       .preview-meta {
@@ -316,7 +472,7 @@
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        margin-top: 6px;
+        padding: 0 2px;
         color: var(--text-muted);
         font-size: 0.72rem;
       }
@@ -325,13 +481,14 @@
         display: block;
         width: 100%;
         height: auto;
-        border: 1px solid var(--line);
-        background: #050505;
+        border: 1px solid rgba(121, 221, 255, 0.12);
+        background: #040b14;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
       }
 
       .histogram-metrics {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
       }
 
@@ -340,8 +497,11 @@
         gap: 6px;
       }
 
-      .two-up {
+      .two-up,
+      .dense-grid {
+        display: grid;
         grid-template-columns: 1fr 1fr;
+        gap: 8px;
       }
 
       .control-grid {
@@ -349,15 +509,11 @@
         gap: 8px;
       }
 
-      .dense-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-      }
-
       .subpanel {
         border: 1px solid var(--line);
-        background: #090909;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 28%),
+          rgba(7, 17, 30, 0.82);
         padding: 8px;
       }
 
@@ -367,7 +523,7 @@
         justify-content: space-between;
         gap: 8px;
         margin-bottom: 8px;
-        font-size: 0.68rem;
+        font-size: 0.66rem;
       }
 
       .toggle {
@@ -379,20 +535,24 @@
 
       .toggle input[type="checkbox"] {
         appearance: none;
-        width: 12px;
-        height: 12px;
+        width: 14px;
+        height: 14px;
         margin: 0;
-        border: 1px solid var(--line-strong);
-        background: #000000;
+        border: 1px solid rgba(121, 221, 255, 0.36);
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.36);
         position: relative;
         cursor: pointer;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
       }
 
       .toggle input[type="checkbox"]:checked::after {
         content: "";
         position: absolute;
-        inset: 2px;
-        background: var(--text);
+        inset: 3px;
+        border-radius: 999px;
+        background: var(--accent-strong);
+        box-shadow: 0 0 10px rgba(121, 221, 255, 0.54);
       }
 
       .field-row {
@@ -409,20 +569,19 @@
 
       .mini-label {
         color: var(--text-soft);
-        font-size: 0.66rem;
+        font-size: 0.64rem;
       }
 
       .field-output {
         color: var(--text);
         font-size: 0.72rem;
-        font-variant-numeric: tabular-nums;
       }
 
       .field,
       select {
         width: 100%;
-        min-height: 28px;
-        padding: 0 8px;
+        min-height: 32px;
+        padding: 0 10px;
       }
 
       select {
@@ -432,41 +591,46 @@
       input[type="range"] {
         appearance: none;
         width: 100%;
-        height: 12px;
+        height: 14px;
         background: transparent;
         margin: 0;
       }
 
       input[type="range"]::-webkit-slider-runnable-track {
-        height: 1px;
-        background: var(--line-strong);
+        height: 2px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(121, 221, 255, 0.68), rgba(121, 221, 255, 0.18));
       }
 
       input[type="range"]::-webkit-slider-thumb {
         appearance: none;
-        width: 10px;
-        height: 10px;
-        margin-top: -4px;
-        border: 1px solid var(--text);
+        width: 12px;
+        height: 12px;
+        margin-top: -5px;
+        border: 1px solid rgba(217, 251, 255, 0.9);
+        border-radius: 999px;
         background: #ffffff;
+        box-shadow: 0 0 12px rgba(121, 221, 255, 0.4);
       }
 
       input[type="range"]::-moz-range-track {
-        height: 1px;
-        background: var(--line-strong);
+        height: 2px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(121, 221, 255, 0.68), rgba(121, 221, 255, 0.18));
       }
 
       input[type="range"]::-moz-range-thumb {
-        width: 10px;
-        height: 10px;
-        border: 1px solid var(--text);
+        width: 12px;
+        height: 12px;
+        border: 1px solid rgba(217, 251, 255, 0.9);
+        border-radius: 999px;
         background: #ffffff;
-        border-radius: 0;
+        box-shadow: 0 0 12px rgba(121, 221, 255, 0.4);
       }
 
       .wheels-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 8px;
       }
 
@@ -476,30 +640,16 @@
         gap: 8px;
       }
 
-      .wheel-card {
-        border: 1px solid var(--line);
-        background: #080808;
-        padding: 8px;
-      }
-
+      .wheel-card,
       .curve-card {
         border: 1px solid var(--line);
-        background: #080808;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 28%),
+          rgba(5, 14, 24, 0.84);
         padding: 8px;
       }
 
-      .wheel-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 6px;
-      }
-
-      .wheel-title {
-        font-size: 0.66rem;
-      }
-
+      .wheel-head,
       .curve-head {
         display: flex;
         align-items: center;
@@ -508,34 +658,26 @@
         margin-bottom: 6px;
       }
 
+      .wheel-title,
       .curve-title {
-        font-size: 0.66rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .wheel-reset {
-        min-height: 22px;
-        padding: 0 6px;
         font-size: 0.64rem;
       }
 
-      .wheel-canvas {
-        display: block;
-        width: 100%;
-        height: auto;
-        border: 1px solid var(--line);
-        background: #050505;
-        touch-action: none;
-        cursor: crosshair;
+      .wheel-reset {
+        min-height: 24px;
+        padding: 0 8px;
+        font-size: 0.62rem;
       }
 
+      .wheel-canvas,
       .curve-canvas {
         display: block;
         width: 100%;
         height: auto;
-        border: 1px solid var(--line);
-        background: #050505;
+        border: 1px solid rgba(121, 221, 255, 0.12);
+        background:
+          linear-gradient(180deg, rgba(121, 221, 255, 0.04), transparent 24%),
+          rgba(4, 10, 18, 0.98);
         touch-action: none;
         cursor: crosshair;
       }
@@ -543,7 +685,7 @@
       .wheel-readout {
         margin-top: 6px;
         color: var(--text-muted);
-        font-size: 0.66rem;
+        font-size: 0.64rem;
         font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
         white-space: nowrap;
         overflow: hidden;
@@ -556,20 +698,141 @@
 
       .status-box {
         border: 1px solid var(--line);
-        background: #060606;
-        padding: 7px 8px;
+        background:
+          linear-gradient(180deg, rgba(121, 221, 255, 0.04), transparent 28%),
+          rgba(5, 14, 26, 0.88);
+        padding: 8px 9px;
       }
 
       .status-label {
         display: block;
         color: var(--text-muted);
-        font-size: 0.64rem;
+        font-size: 0.62rem;
       }
 
       .status-copy {
         display: block;
         margin-top: 4px;
-        font-size: 0.76rem;
+        font-size: 0.75rem;
+      }
+
+      #split-toggle-button {
+        justify-content: flex-start;
+      }
+
+      #split-toggle-button::before {
+        content: "";
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--accent-red);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.06),
+          0 0 14px rgba(255, 111, 118, 0.42);
+      }
+
+      #split-toggle-button[data-state="on"]::before {
+        background: var(--accent-green);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.06),
+          0 0 14px rgba(140, 255, 184, 0.46);
+      }
+
+      /* Neutral editor theme override */
+      .mode-tab,
+      .button,
+      .field,
+      select,
+      .panel-toggle,
+      .metric,
+      .subpanel,
+      .wheel-card,
+      .curve-card,
+      .status-box,
+      .scope-frame,
+      .preview-frame,
+      .panel {
+        background: #121212;
+        box-shadow: none;
+      }
+
+      .mode-tab:hover,
+      .button:hover,
+      .field:hover,
+      select:hover,
+      .panel-toggle:hover {
+        border-color: var(--line-strong);
+        background: #1a1a1a;
+      }
+
+      .mode-tab.active,
+      .button.active {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.24);
+        background: #181818;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+      }
+
+      .panel-head {
+        background: #101010;
+      }
+
+      .scope-frame,
+      .preview-frame {
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0, transparent 1px),
+          #0a0a0a;
+        background-size: 28px 100%;
+      }
+
+      .preview-frame::before {
+        border-color: rgba(255, 255, 255, 0.08);
+        border-radius: 0;
+      }
+
+      #histogram-canvas,
+      .wheel-canvas,
+      .curve-canvas {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: #050505;
+        box-shadow: none;
+      }
+
+      .toggle input[type="checkbox"] {
+        border-color: rgba(255, 255, 255, 0.18);
+        border-radius: 0;
+        background: #090909;
+        box-shadow: none;
+      }
+
+      .toggle input[type="checkbox"]:checked::after {
+        border-radius: 0;
+        background: #f1f1f1;
+        box-shadow: none;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        border-radius: 0;
+        background: rgba(255, 255, 255, 0.22);
+      }
+
+      input[type="range"]::-moz-range-track {
+        border-radius: 0;
+        background: rgba(255, 255, 255, 0.22);
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        border: 1px solid rgba(255, 255, 255, 0.42);
+        border-radius: 0;
+        background: #d8d8d8;
+        box-shadow: none;
+      }
+
+      input[type="range"]::-moz-range-thumb {
+        border: 1px solid rgba(255, 255, 255, 0.42);
+        border-radius: 0;
+        background: #d8d8d8;
+        box-shadow: none;
       }
 
       .file-input {
@@ -580,14 +843,9 @@
         pointer-events: none;
       }
 
-      @media (max-width: 1440px) {
+      @media (max-width: 1500px) {
         .workspace {
           grid-template-columns: 1fr;
-        }
-
-        .stage {
-          border-right: 0;
-          border-bottom: 1px solid var(--line);
         }
 
         #preview-canvas {
@@ -595,9 +853,19 @@
         }
       }
 
+      @media (max-width: 1200px) {
+        .source-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .wheels-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
       @media (max-width: 760px) {
         .app {
-          padding: 4px;
+          padding: 6px;
         }
 
         .topbar {
@@ -671,51 +939,144 @@
                   </div>
                 </div>
 
-                <div class="preview-frame">
-                  <canvas id="preview-canvas" width="1280" height="720"></canvas>
-                </div>
+                <div class="source-layout">
+                  <div class="scope-column">
+                    <div class="scope-frame">
+                      <div class="scope-head">
+                        <div>
+                          <strong>Histogram</strong>
+                          <span>2D neon plane + RGB traces</span>
+                        </div>
+                        <span id="histogram-summary">2D scope plane</span>
+                      </div>
+                      <canvas id="histogram-canvas" width="360" height="228"></canvas>
+                    </div>
 
-                <div class="preview-meta">
-                  <span id="preview-mode-text">Graded preview active</span>
-                  <span id="render-metrics">Preview scale: 1.00x</span>
-                </div>
-              </div>
-            </section>
+                    <div class="histogram-metrics">
+                      <div class="metric">
+                        <span class="metric-label">Avg Luma</span>
+                        <strong id="histogram-avg" class="metric-value">0.0 IRE</strong>
+                      </div>
+                      <div class="metric">
+                        <span class="metric-label">Median</span>
+                        <strong id="histogram-median" class="metric-value">0.0 IRE</strong>
+                      </div>
+                      <div class="metric">
+                        <span class="metric-label">Range</span>
+                        <strong id="histogram-range" class="metric-value">0.0-0.0 IRE</strong>
+                      </div>
+                      <div class="metric">
+                        <span class="metric-label">Spread</span>
+                        <strong id="histogram-spread" class="metric-value">P10 0.0 | P90 0.0</strong>
+                      </div>
+                      <div class="metric">
+                        <span class="metric-label">Zones</span>
+                        <strong id="histogram-zones" class="metric-value">S 0.0 | M 0.0 | H 0.0</strong>
+                      </div>
+                      <div class="metric">
+                        <span class="metric-label">Clip</span>
+                        <strong id="histogram-clip" class="metric-value">Blk 0.0 | Wht 0.0</strong>
+                      </div>
+                    </div>
+                  </div>
 
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <strong>Histogram</strong>
-                  <span>3D luma scope + RGB overlays</span>
-                </div>
-                <span id="histogram-summary">3D luma scope</span>
-              </div>
-              <div class="panel-body mini-grid">
-                <canvas id="histogram-canvas" width="640" height="300"></canvas>
-                <div class="histogram-metrics">
-                  <div class="metric">
-                    <span class="metric-label">Avg Luma</span>
-                    <strong id="histogram-avg" class="metric-value">0.0 IRE</strong>
-                  </div>
-                  <div class="metric">
-                    <span class="metric-label">Median</span>
-                    <strong id="histogram-median" class="metric-value">0.0 IRE</strong>
-                  </div>
-                  <div class="metric">
-                    <span class="metric-label">Range</span>
-                    <strong id="histogram-range" class="metric-value">0.0-0.0 IRE</strong>
-                  </div>
-                  <div class="metric">
-                    <span class="metric-label">Spread</span>
-                    <strong id="histogram-spread" class="metric-value">P10 0.0 | P90 0.0</strong>
-                  </div>
-                  <div class="metric">
-                    <span class="metric-label">Zones</span>
-                    <strong id="histogram-zones" class="metric-value">S 0.0 | M 0.0 | H 0.0</strong>
-                  </div>
-                  <div class="metric">
-                    <span class="metric-label">Clip</span>
-                    <strong id="histogram-clip" class="metric-value">Blk 0.0 | Wht 0.0</strong>
+                  <div class="preview-column">
+                    <div class="preview-frame">
+                      <canvas id="preview-canvas" width="1280" height="720"></canvas>
+                    </div>
+
+                    <div class="preview-meta">
+                      <span id="preview-mode-text">Graded preview active</span>
+                      <span id="render-metrics">Preview scale: 1.00x</span>
+                    </div>
+
+                    <section id="module-tone-card" class="panel is-collapsible" data-collapsible="true" data-collapsed="true">
+                      <div class="panel-head">
+                        <div>
+                          <strong>Color Wheels</strong>
+                          <span>Lift, gamma, gain, offset</span>
+                        </div>
+                        <div class="panel-head-actions">
+                          <label class="toggle">
+                            <input id="module-tone" type="checkbox" checked />
+                            <span>On</span>
+                          </label>
+                          <button class="panel-toggle" type="button" data-panel-toggle aria-expanded="false">
+                            <span class="panel-toggle-text">Open</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div class="panel-body control-grid">
+                        <div class="wheels-grid">
+                          <div class="wheel-card">
+                            <div class="wheel-head">
+                              <span class="wheel-title">Lift</span>
+                              <button class="button wheel-reset" data-wheel-reset="lift" type="button">Reset</button>
+                            </div>
+                            <canvas id="lift-wheel" class="wheel-canvas" width="168" height="168"></canvas>
+                            <div id="lift-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
+                          </div>
+
+                          <div class="wheel-card">
+                            <div class="wheel-head">
+                              <span class="wheel-title">Gamma</span>
+                              <button class="button wheel-reset" data-wheel-reset="gamma" type="button">Reset</button>
+                            </div>
+                            <canvas id="gamma-wheel" class="wheel-canvas" width="168" height="168"></canvas>
+                            <div id="gamma-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
+                          </div>
+
+                          <div class="wheel-card">
+                            <div class="wheel-head">
+                              <span class="wheel-title">Gain</span>
+                              <button class="button wheel-reset" data-wheel-reset="gain" type="button">Reset</button>
+                            </div>
+                            <canvas id="gain-wheel" class="wheel-canvas" width="168" height="168"></canvas>
+                            <div id="gain-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
+                          </div>
+
+                          <div class="wheel-card">
+                            <div class="wheel-head">
+                              <span class="wheel-title">Offset</span>
+                              <button class="button wheel-reset" data-wheel-reset="offset" type="button">Reset</button>
+                            </div>
+                            <canvas id="offset-wheel" class="wheel-canvas" width="168" height="168"></canvas>
+                            <div id="offset-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
+                          </div>
+                        </div>
+
+                        <div class="dense-grid">
+                          <div class="field-row">
+                            <div class="field-head">
+                              <label for="lift" class="mini-label">Lift</label>
+                              <output id="lift-output" class="field-output">0.00</output>
+                            </div>
+                            <input id="lift" type="range" min="-0.25" max="0.25" step="0.01" value="0" />
+                          </div>
+                          <div class="field-row">
+                            <div class="field-head">
+                              <label for="gamma" class="mini-label">Gamma</label>
+                              <output id="gamma-output" class="field-output">1.00</output>
+                            </div>
+                            <input id="gamma" type="range" min="0.5" max="1.8" step="0.01" value="1" />
+                          </div>
+                          <div class="field-row">
+                            <div class="field-head">
+                              <label for="gain" class="mini-label">Gain</label>
+                              <output id="gain-output" class="field-output">1.00</output>
+                            </div>
+                            <input id="gain" type="range" min="0.5" max="2" step="0.01" value="1" />
+                          </div>
+                          <div class="field-row">
+                            <div class="field-head">
+                              <label for="offset" class="mini-label">Offset</label>
+                              <output id="offset-output" class="field-output">0.00</output>
+                            </div>
+                            <input id="offset" type="range" min="-0.25" max="0.25" step="0.01" value="0" />
+                          </div>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 </div>
               </div>
@@ -723,13 +1084,18 @@
           </section>
 
           <aside class="sidebar">
-            <section class="panel">
+            <section class="panel is-collapsible" data-collapsible="true" data-collapsed="true">
               <div class="panel-head">
                 <div>
                   <strong>Session</strong>
                   <span>File, preset, and view</span>
                 </div>
-                <span class="mini-label">I/O</span>
+                <div class="panel-head-actions">
+                  <span class="mini-label">I/O</span>
+                  <button class="panel-toggle" type="button" data-panel-toggle aria-expanded="false">
+                    <span class="panel-toggle-text">Open</span>
+                  </button>
+                </div>
               </div>
               <div class="panel-body control-grid">
                 <div class="field-row">
@@ -763,7 +1129,7 @@
                     <div class="field-head">
                       <span class="mini-label">Split Preview</span>
                     </div>
-                    <button id="split-toggle-button" class="button" type="button" aria-pressed="false">Split Off</button>
+                    <button id="split-toggle-button" class="button" type="button" aria-pressed="false" data-state="off">Split Off</button>
                   </div>
                 </div>
                 <div class="status-box">
@@ -773,13 +1139,18 @@
               </div>
             </section>
 
-            <section class="panel">
+            <section class="panel is-collapsible" data-collapsible="true" data-collapsed="true">
               <div class="panel-head">
                 <div>
                   <strong>Primaries</strong>
                   <span>Primary and balance controls</span>
                 </div>
-                <span class="mini-label">Base Grade</span>
+                <div class="panel-head-actions">
+                  <span class="mini-label">Base Grade</span>
+                  <button class="panel-toggle" type="button" data-panel-toggle aria-expanded="false">
+                    <span class="panel-toggle-text">Open</span>
+                  </button>
+                </div>
               </div>
               <div class="panel-body control-grid">
                 <div id="module-primary-card" class="subpanel">
@@ -857,16 +1228,21 @@
               </div>
             </section>
 
-            <section id="module-curves-card" class="panel">
+            <section id="module-curves-card" class="panel is-collapsible" data-collapsible="true" data-collapsed="true">
               <div class="panel-head">
                 <div>
                   <strong>Curves</strong>
                   <span>Luma and RGB correction</span>
                 </div>
-                <label class="toggle">
-                  <input id="module-curves" type="checkbox" checked />
-                  <span>On</span>
-                </label>
+                <div class="panel-head-actions">
+                  <label class="toggle">
+                    <input id="module-curves" type="checkbox" checked />
+                    <span>On</span>
+                  </label>
+                  <button class="panel-toggle" type="button" data-panel-toggle aria-expanded="false">
+                    <span class="panel-toggle-text">Open</span>
+                  </button>
+                </div>
               </div>
               <div class="panel-body control-grid">
                 <div class="curves-grid">
@@ -928,89 +1304,6 @@
                       </div>
                       <input id="curve-blue-intensity" type="range" min="0" max="100" step="1" value="100" />
                     </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section id="module-tone-card" class="panel">
-              <div class="panel-head">
-                <div>
-                  <strong>Color Wheels</strong>
-                  <span>Lift, gamma, gain, offset</span>
-                </div>
-                <label class="toggle">
-                  <input id="module-tone" type="checkbox" checked />
-                  <span>On</span>
-                </label>
-              </div>
-              <div class="panel-body control-grid">
-                <div class="wheels-grid">
-                  <div class="wheel-card">
-                    <div class="wheel-head">
-                      <span class="wheel-title">Lift</span>
-                      <button class="button wheel-reset" data-wheel-reset="lift" type="button">Reset</button>
-                    </div>
-                    <canvas id="lift-wheel" class="wheel-canvas" width="168" height="168"></canvas>
-                    <div id="lift-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
-                  </div>
-
-                  <div class="wheel-card">
-                    <div class="wheel-head">
-                      <span class="wheel-title">Gamma</span>
-                      <button class="button wheel-reset" data-wheel-reset="gamma" type="button">Reset</button>
-                    </div>
-                    <canvas id="gamma-wheel" class="wheel-canvas" width="168" height="168"></canvas>
-                    <div id="gamma-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
-                  </div>
-
-                  <div class="wheel-card">
-                    <div class="wheel-head">
-                      <span class="wheel-title">Gain</span>
-                      <button class="button wheel-reset" data-wheel-reset="gain" type="button">Reset</button>
-                    </div>
-                    <canvas id="gain-wheel" class="wheel-canvas" width="168" height="168"></canvas>
-                    <div id="gain-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
-                  </div>
-
-                  <div class="wheel-card">
-                    <div class="wheel-head">
-                      <span class="wheel-title">Offset</span>
-                      <button class="button wheel-reset" data-wheel-reset="offset" type="button">Reset</button>
-                    </div>
-                    <canvas id="offset-wheel" class="wheel-canvas" width="168" height="168"></canvas>
-                    <div id="offset-wheel-readout" class="wheel-readout">M 0.00 | R +0.00 G +0.00 B +0.00</div>
-                  </div>
-                </div>
-
-                <div class="dense-grid">
-                  <div class="field-row">
-                    <div class="field-head">
-                      <label for="lift" class="mini-label">Lift</label>
-                      <output id="lift-output" class="field-output">0.00</output>
-                    </div>
-                    <input id="lift" type="range" min="-0.25" max="0.25" step="0.01" value="0" />
-                  </div>
-                  <div class="field-row">
-                    <div class="field-head">
-                      <label for="gamma" class="mini-label">Gamma</label>
-                      <output id="gamma-output" class="field-output">1.00</output>
-                    </div>
-                    <input id="gamma" type="range" min="0.5" max="1.8" step="0.01" value="1" />
-                  </div>
-                  <div class="field-row">
-                    <div class="field-head">
-                      <label for="gain" class="mini-label">Gain</label>
-                      <output id="gain-output" class="field-output">1.00</output>
-                    </div>
-                    <input id="gain" type="range" min="0.5" max="2" step="0.01" value="1" />
-                  </div>
-                  <div class="field-row">
-                    <div class="field-head">
-                      <label for="offset" class="mini-label">Offset</label>
-                      <output id="offset-output" class="field-output">0.00</output>
-                    </div>
-                    <input id="offset" type="range" min="-0.25" max="0.25" step="0.01" value="0" />
                   </div>
                 </div>
               </div>
