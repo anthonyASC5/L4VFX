@@ -1,4 +1,6 @@
 const MAX_PREVIEW_EDGE = 1600;
+const INTERACTIVE_RENDER_STEP = 2;
+const INTERACTIVE_RENDER_SETTLE_MS = 140;
 const HISTOGRAM_BINS = 72;
 const HISTOGRAM_TARGET_SAMPLES = 36000;
 const HISTOGRAM_DEBOUNCE_MS = 90;
@@ -222,6 +224,10 @@ const state = {
   previewScale: 1,
   compareHeld: false,
   renderQueued: false,
+  queuedRenderMode: null,
+  fullRenderTimer: 0,
+  lastRenderMode: "full",
+  lastRenderDurationMs: 0,
   colorScratch: new Float32Array(3),
   conversionScratch: new Float32Array(3),
   wheels: cloneWheelSnapshot(),
@@ -1267,17 +1273,7 @@ function buildPipelineSummary(snapshot) {
 }
 
 function syncUi(snapshot = readSnapshot()) {
-  exposureOutput.textContent = formatNumber(snapshot.controls.exposure, 2);
-  contrastOutput.textContent = formatNumber(snapshot.controls.contrast, 2);
-  saturationOutput.textContent = formatNumber(snapshot.controls.saturation, 2);
-  pivotOutput.textContent = formatNumber(snapshot.controls.pivot, 2);
-  temperatureOutput.textContent = formatNumber(snapshot.controls.temperature, 2);
-  tintOutput.textContent = formatNumber(snapshot.controls.tint, 2);
-  liftOutput.textContent = formatNumber(snapshot.controls.lift, 2);
-  gammaOutput.textContent = formatNumber(snapshot.controls.gamma, 2);
-  gainOutput.textContent = formatNumber(snapshot.controls.gain, 2);
-  offsetOutput.textContent = formatNumber(snapshot.controls.offset, 2);
-  lutSizeOutput.textContent = String(snapshot.lutSize);
+  syncControlOutputs(snapshot);
 
   splitToggleButton.classList.toggle("active", snapshot.view.splitView);
   splitToggleButton.setAttribute("aria-pressed", String(snapshot.view.splitView));
@@ -1300,6 +1296,34 @@ function syncUi(snapshot = readSnapshot()) {
 
   syncCurves(snapshot);
   syncWheels(snapshot);
+}
+
+function syncControlOutputs(snapshot = readSnapshot()) {
+  exposureOutput.textContent = formatNumber(snapshot.controls.exposure, 2);
+  contrastOutput.textContent = formatNumber(snapshot.controls.contrast, 2);
+  saturationOutput.textContent = formatNumber(snapshot.controls.saturation, 2);
+  pivotOutput.textContent = formatNumber(snapshot.controls.pivot, 2);
+  temperatureOutput.textContent = formatNumber(snapshot.controls.temperature, 2);
+  tintOutput.textContent = formatNumber(snapshot.controls.tint, 2);
+  liftOutput.textContent = formatNumber(snapshot.controls.lift, 2);
+  gammaOutput.textContent = formatNumber(snapshot.controls.gamma, 2);
+  gainOutput.textContent = formatNumber(snapshot.controls.gain, 2);
+  offsetOutput.textContent = formatNumber(snapshot.controls.offset, 2);
+  lutSizeOutput.textContent = String(snapshot.lutSize);
+}
+
+function syncControlOutputsFromInputs() {
+  exposureOutput.textContent = formatNumber(Number(exposureInput.value), 2);
+  contrastOutput.textContent = formatNumber(Number(contrastInput.value), 2);
+  saturationOutput.textContent = formatNumber(Number(saturationInput.value), 2);
+  pivotOutput.textContent = formatNumber(Number(pivotInput.value), 2);
+  temperatureOutput.textContent = formatNumber(Number(temperatureInput.value), 2);
+  tintOutput.textContent = formatNumber(Number(tintInput.value), 2);
+  liftOutput.textContent = formatNumber(Number(liftInput.value), 2);
+  gammaOutput.textContent = formatNumber(Number(gammaInput.value), 2);
+  gainOutput.textContent = formatNumber(Number(gainInput.value), 2);
+  offsetOutput.textContent = formatNumber(Number(offsetInput.value), 2);
+  lutSizeOutput.textContent = String(lutSizeSelect.value);
 }
 
 function buildPipeline(snapshot) {
@@ -1771,8 +1795,6 @@ function drawPreviewComposite(snapshot = readSnapshot()) {
     return;
   }
 
-  syncUi(snapshot);
-
   const width = state.sourceImageData.width;
   const height = state.sourceImageData.height;
 
@@ -1786,28 +1808,11 @@ function drawPreviewComposite(snapshot = readSnapshot()) {
     return;
   }
 
-  if (!state.displayImageData || state.displayImageData.width !== width || state.displayImageData.height !== height) {
-    state.displayImageData = previewCtx.createImageData(width, height);
-  }
-
   const splitColumn = clamp(Math.round(snapshot.view.splitPosition * width), 0, width);
-  const sourcePixels = state.sourceImageData.data;
-  const gradedPixels = state.gradedImageData.data;
-  const displayPixels = state.displayImageData.data;
-
-  let offset = 0;
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const showSource = x < splitColumn;
-      displayPixels[offset] = showSource ? sourcePixels[offset] : gradedPixels[offset];
-      displayPixels[offset + 1] = showSource ? sourcePixels[offset + 1] : gradedPixels[offset + 1];
-      displayPixels[offset + 2] = showSource ? sourcePixels[offset + 2] : gradedPixels[offset + 2];
-      displayPixels[offset + 3] = showSource ? sourcePixels[offset + 3] : gradedPixels[offset + 3];
-      offset += 4;
-    }
+  previewCtx.putImageData(state.gradedImageData, 0, 0);
+  if (splitColumn > 0) {
+    previewCtx.putImageData(state.sourceImageData, 0, 0, 0, 0, splitColumn, height);
   }
-
-  previewCtx.putImageData(state.displayImageData, 0, 0);
 }
 
 function ensureHistogramBaseCanvas(width, height) {
@@ -2109,6 +2114,37 @@ function renderHistogramFromGradedImage(requestId) {
   drawHistogram(histogram, details);
 }
 
+function clearScheduledFullRender() {
+  if (state.fullRenderTimer) {
+    window.clearTimeout(state.fullRenderTimer);
+    state.fullRenderTimer = 0;
+  }
+}
+
+function queueRender(mode = "full") {
+  if (!state.sourceImageData) {
+    return;
+  }
+
+  state.queuedRenderMode = mode;
+
+  if (state.renderQueued) {
+    return;
+  }
+
+  state.renderQueued = true;
+  window.requestAnimationFrame(() => {
+    state.renderQueued = false;
+    const nextMode = state.queuedRenderMode || "full";
+    state.queuedRenderMode = null;
+    renderProcessedPreview(nextMode);
+
+    if (state.queuedRenderMode) {
+      queueRender(state.queuedRenderMode);
+    }
+  });
+}
+
 function scheduleHistogramRender() {
   if (!state.gradedImageData) {
     return;
@@ -2133,17 +2169,21 @@ function scheduleHistogramRender() {
   }, HISTOGRAM_DEBOUNCE_MS);
 }
 
-function renderProcessedPreview() {
+function renderProcessedPreview(mode = "full") {
   if (!state.sourceImageData) {
     return;
   }
 
+  const interactive = mode === "interactive";
   const snapshot = readSnapshot();
   const pipeline = buildPipeline(snapshot);
   const sourcePixels = state.sourceImageData.data;
   const width = state.sourceImageData.width;
   const height = state.sourceImageData.height;
   const scratch = state.colorScratch;
+  const renderStep = interactive ? INTERACTIVE_RENDER_STEP : 1;
+  const rowStride = width * 4;
+  const renderStartedAt = window.performance?.now?.() ?? Date.now();
 
   if (!state.gradedImageData || state.gradedImageData.width !== width || state.gradedImageData.height !== height) {
     state.gradedImageData = previewCtx.createImageData(width, height);
@@ -2151,44 +2191,92 @@ function renderProcessedPreview() {
 
   const gradedPixels = state.gradedImageData.data;
 
-  for (let offset = 0; offset < sourcePixels.length; offset += 4) {
-    const alpha = sourcePixels[offset + 3];
-    gradeByteRgb(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2], pipeline, scratch);
+  if (renderStep === 1) {
+    for (let offset = 0; offset < sourcePixels.length; offset += 4) {
+      const alpha = sourcePixels[offset + 3];
+      gradeByteRgb(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2], pipeline, scratch);
 
-    const red = Math.round(scratch[0] * 255);
-    const green = Math.round(scratch[1] * 255);
-    const blue = Math.round(scratch[2] * 255);
+      gradedPixels[offset] = Math.round(scratch[0] * 255);
+      gradedPixels[offset + 1] = Math.round(scratch[1] * 255);
+      gradedPixels[offset + 2] = Math.round(scratch[2] * 255);
+      gradedPixels[offset + 3] = alpha;
+    }
+  } else {
+    for (let y = 0; y < height; y += renderStep) {
+      const blockHeight = Math.min(renderStep, height - y);
+      for (let x = 0; x < width; x += renderStep) {
+        const blockWidth = Math.min(renderStep, width - x);
+        const sourceOffset = (y * rowStride) + (x * 4);
+        const alpha = sourcePixels[sourceOffset + 3];
+        gradeByteRgb(
+          sourcePixels[sourceOffset],
+          sourcePixels[sourceOffset + 1],
+          sourcePixels[sourceOffset + 2],
+          pipeline,
+          scratch,
+        );
 
-    gradedPixels[offset] = red;
-    gradedPixels[offset + 1] = green;
-    gradedPixels[offset + 2] = blue;
-    gradedPixels[offset + 3] = alpha;
+        const red = Math.round(scratch[0] * 255);
+        const green = Math.round(scratch[1] * 255);
+        const blue = Math.round(scratch[2] * 255);
+
+        for (let blockY = 0; blockY < blockHeight; blockY += 1) {
+          let gradedOffset = sourceOffset + (blockY * rowStride);
+          for (let blockX = 0; blockX < blockWidth; blockX += 1) {
+            gradedPixels[gradedOffset] = red;
+            gradedPixels[gradedOffset + 1] = green;
+            gradedPixels[gradedOffset + 2] = blue;
+            gradedPixels[gradedOffset + 3] = alpha;
+            gradedOffset += 4;
+          }
+        }
+      }
+    }
   }
 
   drawPreviewComposite(snapshot);
+  state.lastRenderMode = mode;
+  state.lastRenderDurationMs = (window.performance?.now?.() ?? Date.now()) - renderStartedAt;
+  updateRenderMetrics();
+
+  if (interactive) {
+    clearScheduledHistogramRender();
+    histogramSummaryText.textContent = `2D scope | waiting for full frame...`;
+    return;
+  }
+
   scheduleHistogramRender();
 }
 
 function scheduleRender() {
-  if (state.renderQueued) {
-    return;
-  }
-  state.renderQueued = true;
-  window.requestAnimationFrame(() => {
-    state.renderQueued = false;
-    renderProcessedPreview();
-  });
+  clearScheduledFullRender();
+  queueRender("full");
+}
+
+function scheduleInteractiveRender() {
+  clearScheduledFullRender();
+  queueRender("interactive");
+  state.fullRenderTimer = window.setTimeout(() => {
+    state.fullRenderTimer = 0;
+    queueRender("full");
+  }, INTERACTIVE_RENDER_SETTLE_MS);
+}
+
+function updateRenderMetrics() {
+  const renderLabel = state.lastRenderMode === "interactive" ? `Interactive ${INTERACTIVE_RENDER_STEP}x` : "Full";
+  renderMetricsText.textContent = `Preview scale: ${state.previewScale.toFixed(2)}x | ${previewCanvas.width.toLocaleString()} x ${previewCanvas.height.toLocaleString()} | ${renderLabel} | ${state.lastRenderDurationMs.toFixed(1)} ms`;
 }
 
 function updateSourceMeta() {
   fileNameText.textContent = state.sourceName;
   imageResolutionText.textContent = `${state.naturalWidth.toLocaleString()} x ${state.naturalHeight.toLocaleString()}`;
-  renderMetricsText.textContent = `Preview scale: ${state.previewScale.toFixed(2)}x | ${previewCanvas.width.toLocaleString()} x ${previewCanvas.height.toLocaleString()}`;
+  updateRenderMetrics();
 }
 
 function installSource(drawable, sourceName, naturalWidth, naturalHeight) {
   const fitted = fitPreviewDimensions(naturalWidth, naturalHeight);
   clearScheduledHistogramRender();
+  clearScheduledFullRender();
   state.histogramRequestId += 1;
   previewCanvas.width = fitted.width;
   previewCanvas.height = fitted.height;
@@ -2354,6 +2442,13 @@ function setCompareHeld(nextState) {
   state.compareHeld = nextState;
   compareButton.classList.toggle("active", nextState);
   compareButton.setAttribute("aria-pressed", String(nextState));
+  if (nextState) {
+    previewModeText.textContent = "Original hold active";
+  } else {
+    previewModeText.textContent = splitToggleButton.getAttribute("aria-pressed") === "true"
+      ? "Split view active"
+      : "Graded preview active";
+  }
   drawPreviewComposite(readSnapshot());
 }
 
@@ -2370,14 +2465,16 @@ function wheelEventToPoint(canvas, event) {
 
 function setWheelPoint(key, point) {
   state.wheels[key] = clampWheelPoint(point.x, point.y);
-  syncUi(readSnapshot());
-  scheduleRender();
+  drawWheel(key, state.wheels[key]);
+  updateWheelReadout(key, state.wheels[key]);
+  scheduleInteractiveRender();
 }
 
 function resetWheel(key) {
   state.wheels[key] = { x: 0, y: 0 };
-  syncUi(readSnapshot());
-  scheduleRender();
+  drawWheel(key, state.wheels[key]);
+  updateWheelReadout(key, state.wheels[key]);
+  scheduleInteractiveRender();
 }
 
 function curveEventToPoint(canvas, event) {
@@ -2427,15 +2524,17 @@ function setCurvePoint(key, handleIndex, point) {
     intensity: definition.intensity,
     points,
   };
-  syncUi(readSnapshot());
-  scheduleRender();
+  drawCurve(key, state.curves[key]);
+  curveElements[key].output.textContent = String(Math.round(state.curves[key].intensity * 100));
+  scheduleInteractiveRender();
 }
 
 function resetCurve(key) {
   state.curves[key] = sanitizeCurveDefinition(DEFAULT_CURVES[key], key);
   curveElements[key].intensity.value = "100";
-  syncUi(readSnapshot());
-  scheduleRender();
+  drawCurve(key, state.curves[key]);
+  curveElements[key].output.textContent = "100";
+  scheduleInteractiveRender();
 }
 
 async function exportPng() {
@@ -2608,8 +2707,12 @@ function bindCurveInputs() {
     canvas.addEventListener("dblclick", () => resetCurve(key));
     curve.reset.addEventListener("click", () => resetCurve(key));
     curve.intensity.addEventListener("input", () => {
-      syncUi(readSnapshot());
-      scheduleRender();
+      const definition = sanitizeCurveDefinition(state.curves[key], key);
+      definition.intensity = clampUnit(Number(curve.intensity.value) / 100);
+      state.curves[key] = definition;
+      drawCurve(key, definition);
+      curve.output.textContent = String(Math.round(definition.intensity * 100));
+      scheduleInteractiveRender();
     });
   });
 }
@@ -2628,33 +2731,42 @@ function bindPipelineInputs() {
     offsetInput,
   ].forEach((input) => {
     input.addEventListener("input", () => {
-      syncUi(readSnapshot());
-      scheduleRender();
+      syncControlOutputsFromInputs();
+      scheduleInteractiveRender();
     });
   });
 
   Object.values(moduleInputs).forEach((input) => {
     input.addEventListener("change", () => {
-      syncUi(readSnapshot());
-      scheduleRender();
+      const snapshot = readSnapshot();
+      syncUi(snapshot);
+      scheduleInteractiveRender();
     });
   });
 
   splitToggleButton.addEventListener("click", () => {
     const nextState = splitToggleButton.getAttribute("aria-pressed") !== "true";
     splitToggleButton.setAttribute("aria-pressed", String(nextState));
+    splitToggleButton.classList.toggle("active", nextState);
+    splitToggleButton.dataset.state = nextState ? "on" : "off";
+    splitToggleButton.textContent = nextState ? "Split On" : "Split Off";
+    if (!state.compareHeld) {
+      previewModeText.textContent = nextState ? "Split view active" : "Graded preview active";
+    }
     drawPreviewComposite(readSnapshot());
   });
 
   lutSizeSelect.addEventListener("change", () => {
-    syncUi(readSnapshot());
+    lutSizeOutput.textContent = lutSizeSelect.value;
   });
 
   conversionLutSelect.addEventListener("change", () => {
+    syncUi(readSnapshot());
     void loadConversionLut(conversionLutSelect.value);
   });
 
   filterLutSelect.addEventListener("change", () => {
+    syncUi(readSnapshot());
     void loadFilterLut(filterLutSelect.value);
   });
 }
@@ -2672,7 +2784,7 @@ function bindActionInputs() {
 
   resetButton.addEventListener("click", () => {
     applySnapshot(DEFAULT_SNAPSHOT);
-    scheduleRender();
+    scheduleInteractiveRender();
     setStatus("Grade reset to the default stack.");
   });
 
