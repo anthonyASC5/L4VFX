@@ -503,6 +503,7 @@ export function createVideoWorkspace({
   const canvas = document.getElementById("video-canvas");
   const uploadButton = document.getElementById("upload-button");
   const playButton = document.getElementById("play-button");
+  const restartButton = document.getElementById("restart-button");
   const randomizeButton = document.getElementById("randomize-button");
   const splitButton = document.getElementById("split-button");
   const splitStackButton = document.getElementById("split-stack-button");
@@ -534,6 +535,8 @@ export function createVideoWorkspace({
   const playheadRange = document.getElementById("playhead-range");
   const currentTimeOutput = document.getElementById("current-time");
   const durationTimeOutput = document.getElementById("duration-time");
+  const stagePanel = document.querySelector(".stage-panel");
+  const videoSizeSelect = document.getElementById("video-size-select");
   const effectRack = document.getElementById("effects-rack");
   const inspectorTabs = Array.from(document.querySelectorAll(".inspector-tab[data-inspector-tab]"));
   const inspectorPanels = Array.from(document.querySelectorAll(".inspector-panel[data-inspector-panel]"));
@@ -844,6 +847,22 @@ export function createVideoWorkspace({
     }
     const preset = getQualityPreset();
     qualityMeta.textContent = `${preset.label} quality renders at ${Math.round(preset.scale * 100)}% resolution and caps preview at ${targetFps} FPS.`;
+  }
+
+  function randomizeButtonAccent() {
+    if (!randomizeButton) {
+      return;
+    }
+
+    const hue = Math.floor(Math.random() * 360);
+    randomizeButton.style.setProperty("--random-hue", String(hue));
+  }
+
+  function updateVideoSizeLayout() {
+    if (!stagePanel || !videoSizeSelect) {
+      return;
+    }
+    stagePanel.dataset.videoSize = videoSizeSelect.value || "50";
   }
 
   function getLayerById(layerId) {
@@ -3461,6 +3480,22 @@ export function createVideoWorkspace({
     setStatus("Playback stopped.");
   }
 
+  function restartPlayback() {
+    if (!sourceVideo.src) {
+      setStatus("Upload a video first.");
+      return;
+    }
+
+    stopReversePlayback();
+    sourceVideo.pause();
+    stopVideoFrameObserver();
+    clearPlaybackSampling(true);
+    clearPreviewSampling();
+    setMediaTime(0);
+    updateFpsReadout();
+    setStatus("Playback restarted.");
+  }
+
   function startReversePlayback() {
     if (!sourceVideo.src) {
       setStatus("Upload a video first.");
@@ -3633,6 +3668,9 @@ export function createVideoWorkspace({
   playButton?.addEventListener("click", () => {
     togglePlayback();
   });
+  restartButton?.addEventListener("click", () => {
+    restartPlayback();
+  });
   playheadRange?.addEventListener("input", () => {
     const value = Number(playheadRange.value);
     if (Number.isFinite(value)) {
@@ -3648,6 +3686,7 @@ export function createVideoWorkspace({
     updateTimelinePlayhead();
   });
   randomizeButton?.addEventListener("click", () => {
+    randomizeButtonAccent();
     randomizeEffects();
   });
   headerPlayButton?.addEventListener("click", () => {
@@ -3700,6 +3739,9 @@ export function createVideoWorkspace({
   fpsSelect?.addEventListener("change", () => {
     applyPerformanceSettings();
   });
+  videoSizeSelect?.addEventListener("change", () => {
+    updateVideoSizeLayout();
+  });
   inspectorTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       setActiveInspectorTab(tab.dataset.inspectorTab || "clip");
@@ -3730,8 +3772,10 @@ export function createVideoWorkspace({
   });
 
   updateQualityMeta();
+  randomizeButtonAccent();
   updateSplitButtons();
   updateTimelineSnapButton();
+  updateVideoSizeLayout();
   updateExportButton();
   setActiveInspectorTab(activeInspectorTab);
   renderEffectRack();

@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lanzoid</title>
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg?v=3" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #04070b;
+        --bg-grid: rgba(119, 222, 255, 0.08);
+        --panel: rgba(6, 13, 20, 0.94);
+        --panel-alt: rgba(11, 19, 28, 0.98);
+        --line: rgba(90, 188, 255, 0.16);
+        --line-strong: rgba(123, 224, 255, 0.4);
+        --text: #e8f6ff;
+        --text-soft: rgba(232, 246, 255, 0.82);
+        --text-muted: rgba(151, 189, 212, 0.58);
+        --accent: #67f0ff;
+        --accent-hot: #ff7ad9;
+        --accent-lime: #b6ff65;
+        --danger: #ff6d8f;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.42);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        min-height: 100%;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at top left, rgba(103, 240, 255, 0.14), transparent 24%),
+          radial-gradient(circle at 80% 16%, rgba(255, 122, 217, 0.14), transparent 18%),
+          linear-gradient(180deg, #08111b 0%, #03060a 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      }
+
+      body {
+        position: relative;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.28;
+        background:
+          linear-gradient(90deg, transparent 0, rgba(255, 255, 255, 0.03) 50%, transparent 100%),
+          repeating-linear-gradient(180deg, rgba(119, 222, 255, 0.06) 0, rgba(119, 222, 255, 0.06) 1px, transparent 1px, transparent 44px),
+          repeating-linear-gradient(90deg, rgba(119, 222, 255, 0.04) 0, rgba(119, 222, 255, 0.04) 1px, transparent 1px, transparent 44px);
+      }
+
+      body .site-home-logo {
+        display: none !important;
+      }
+
+      button,
+      input,
+      select,
+      output {
+        font: inherit;
+        color: inherit;
+      }
+
+      .app {
+        height: 100vh;
+        padding: 8px;
+        overflow: hidden;
+      }
+
+      .shell {
+        height: calc(100vh - 16px);
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(8, 14, 20, 0.9), rgba(2, 5, 9, 0.96));
+        box-shadow: var(--shadow);
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(10, 20, 29, 0.98), rgba(7, 13, 21, 0.98)),
+          repeating-linear-gradient(90deg, rgba(103, 240, 255, 0.08) 0, rgba(103, 240, 255, 0.08) 1px, transparent 1px, transparent 16px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .brand-mark {
+        position: relative;
+        width: 24px;
+        height: 24px;
+        border: 1px solid var(--line-strong);
+        background:
+          linear-gradient(135deg, rgba(103, 240, 255, 0.16), rgba(255, 122, 217, 0.12)),
+          rgba(4, 9, 15, 0.98);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+          0 0 24px rgba(103, 240, 255, 0.14);
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        content: "";
+        position: absolute;
+        background: var(--accent);
+      }
+
+      .brand-mark::before {
+        inset: 5px auto 5px 11px;
+        width: 1px;
+      }
+
+      .brand-mark::after {
+        inset: 11px 5px auto 5px;
+        height: 1px;
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .eyebrow,
+      .mode-tab,
+      .action-button,
+      .section-title,
+      .field-label,
+      .toggle-label,
+      .pill,
+      .brand-copy strong {
+        font-family: "Rajdhani", "Space Grotesk", sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      .eyebrow {
+        margin: 0 0 2px;
+        font-size: 0.66rem;
+        color: var(--accent);
+      }
+
+      .brand-copy strong {
+        display: block;
+        font-size: 0.92rem;
+      }
+
+      .brand-copy span {
+        display: block;
+        color: var(--text-muted);
+        font-size: 0.76rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mode-tabs {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .mode-tab,
+      .action-button,
+      .field,
+      select,
+      input[type="text"],
+      input[type="color"],
+      input[type="number"] {
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+          rgba(8, 15, 22, 0.98);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      }
+
+      .mode-tab,
+      .action-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 30px;
+        padding: 0 10px;
+        color: var(--text-soft);
+        text-decoration: none;
+      }
+
+      .mode-tab.active,
+      .action-button:hover,
+      .action-button:focus-visible,
+      .mode-tab:hover,
+      .mode-tab:focus-visible {
+        border-color: var(--line-strong);
+        color: var(--text);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.04),
+          0 0 20px rgba(103, 240, 255, 0.08);
+      }
+
+      .topbar-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .action-button {
+        cursor: pointer;
+      }
+
+      .action-button.is-primary {
+        border-color: rgba(182, 255, 101, 0.42);
+        color: #ebffd2;
+        background:
+          linear-gradient(180deg, rgba(182, 255, 101, 0.12), rgba(182, 255, 101, 0.03)),
+          rgba(8, 15, 22, 0.98);
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 286px;
+      }
+
+      .stage {
+        position: relative;
+        min-height: 0;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 50% 20%, rgba(103, 240, 255, 0.1), transparent 26%),
+          linear-gradient(180deg, rgba(7, 12, 19, 0.98), rgba(3, 6, 10, 1));
+      }
+
+      .stage::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, 0.02) 48%, transparent 100%),
+          repeating-linear-gradient(180deg, rgba(103, 240, 255, 0.04) 0, rgba(103, 240, 255, 0.04) 1px, transparent 1px, transparent 72px);
+        opacity: 0.3;
+      }
+
+      #viewport {
+        position: absolute;
+        inset: 0;
+      }
+
+      #viewport canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .stage-hud {
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        pointer-events: none;
+      }
+
+      .hud-card {
+        max-width: min(360px, 48%);
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: rgba(5, 11, 17, 0.82);
+        backdrop-filter: blur(8px);
+      }
+
+      .hud-card strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .hud-card span {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+      }
+
+      .inspector {
+        min-height: 0;
+        overflow: auto;
+        border-left: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(7, 13, 20, 0.98), rgba(3, 7, 11, 1)),
+          repeating-linear-gradient(180deg, rgba(103, 240, 255, 0.04) 0, rgba(103, 240, 255, 0.04) 1px, transparent 1px, transparent 18px);
+        padding: 10px;
+      }
+
+      .inspector-inner {
+        display: grid;
+        gap: 8px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(11, 20, 28, 0.96), rgba(5, 10, 15, 0.98));
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 10px 8px;
+        background: rgba(103, 240, 255, 0.05);
+        cursor: pointer;
+      }
+
+      .section-title {
+        font-size: 0.76rem;
+      }
+
+      .pill {
+        padding: 2px 8px;
+        font-size: 0.62rem;
+        color: var(--text-muted);
+        border: 1px solid rgba(103, 240, 255, 0.16);
+      }
+
+      .panel-body {
+        padding: 10px;
+        display: grid;
+        gap: 10px;
+        border-top: 1px solid var(--line);
+      }
+
+      .panel.collapsed .panel-body {
+        display: none;
+      }
+
+      .panel-head-main {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .panel-toggle {
+        width: 20px;
+        height: 20px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        background: rgba(8, 15, 22, 0.98);
+        color: var(--accent);
+        font-size: 0.8rem;
+        line-height: 1;
+      }
+
+      .panel.collapsed .panel-toggle {
+        color: var(--text-muted);
+      }
+
+      .field-group {
+        display: grid;
+        gap: 6px;
+      }
+
+      .preset-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .preset-button {
+        min-height: 34px;
+        padding: 0 8px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 34%),
+          rgba(8, 15, 22, 0.98);
+        color: var(--text-soft);
+        font-family: "Rajdhani", "Space Grotesk", sans-serif;
+        font-size: 0.72rem;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .preset-button.active {
+        border-color: rgba(255, 122, 217, 0.42);
+        color: #fff1ff;
+        background:
+          linear-gradient(180deg, rgba(255, 122, 217, 0.16), rgba(103, 240, 255, 0.06)),
+          rgba(8, 15, 22, 0.98);
+        box-shadow: 0 0 18px rgba(255, 122, 217, 0.12);
+      }
+
+      .field-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .field-label {
+        font-size: 0.7rem;
+      }
+
+      .field-output {
+        font-size: 0.66rem;
+        color: var(--text-muted);
+      }
+
+      .field,
+      select,
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        min-height: 34px;
+        padding: 0 8px;
+      }
+
+      input[type="color"] {
+        width: 100%;
+        height: 34px;
+        padding: 4px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .triple {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 32px;
+      }
+
+      .toggle-label {
+        font-size: 0.7rem;
+      }
+
+      .hint,
+      .status {
+        color: var(--text-muted);
+        font-size: 0.68rem;
+      }
+
+      .status {
+        min-height: 1.4em;
+      }
+
+      @media (max-width: 1040px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .inspector {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+          max-height: 42vh;
+        }
+
+        .topbar {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar-actions,
+        .mode-tabs {
+          justify-content: flex-start;
+        }
+
+        .stage-hud {
+          flex-direction: column;
+        }
+
+        .hud-card {
+          max-width: 100%;
+        }
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <div class="shell">
+        <header class="topbar">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true"></div>
+            <div class="brand-copy">
+              <p class="eyebrow">PS2 Text Forge</p>
+              <strong>Lanzoid</strong>
+              <span>Real-time extrude, bevel, shader flavor, and export.</span>
+            </div>
+          </div>
+
+          <nav class="mode-tabs" aria-label="Editor Tabs"></nav>
+
+          <div class="topbar-actions">
+            <button class="action-button" id="reset-camera-button" type="button">Reset Camera</button>
+            <button class="action-button" id="export-png-button" type="button">Export PNG</button>
+            <button class="action-button is-primary" id="export-gltf-button" type="button">Export GLTF</button>
+          </div>
+        </header>
+
+        <main class="workspace">
+          <section class="stage">
+            <div id="viewport" aria-label="Lanzoid 3D viewport"></div>
+            <div class="stage-hud">
+              <div class="hud-card">
+                <strong>Orbit + Pan</strong>
+                <span>Drag to orbit, wheel to zoom, Shift-drag to pan. Text updates live while you edit.</span>
+              </div>
+              <div class="hud-card">
+                <strong>Status</strong>
+                <span id="status-text">Initializing Lanzoid scene.</span>
+              </div>
+            </div>
+          </section>
+
+          <aside class="inspector">
+            <div class="inspector-inner">
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Presets</span>
+                  </div>
+                  <span class="pill" id="preset-status">NEON</span>
+                </div>
+                <div class="panel-body">
+                  <div class="preset-grid">
+                    <button class="preset-button" data-preset="neon" type="button">Neon</button>
+                    <button class="preset-button" data-preset="chrome" type="button">Chrome</button>
+                    <button class="preset-button" data-preset="plastic" type="button">Plastic</button>
+                    <button class="preset-button" data-preset="balloon" type="button">Balloon</button>
+                    <button class="preset-button" data-preset="purple-metal" type="button">Purple Metal</button>
+                  </div>
+                  <p class="hint">Presets update geometry, material, transform, and effects together.</p>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Text Input</span>
+                  </div>
+                  <span class="pill">Live</span>
+                </div>
+                <div class="panel-body">
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="text-input">String</label>
+                    </div>
+                    <input id="text-input" type="text" value="LANZOID" spellcheck="false" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="font-select">Font</label>
+                      <span class="field-output" id="font-status">Loading</span>
+                    </div>
+                    <select id="font-select"></select>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Geometry</span>
+                  </div>
+                  <span class="pill">Extrude</span>
+                </div>
+                <div class="panel-body">
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="size-input">Size</label>
+                      <output class="field-output" id="size-output"></output>
+                    </div>
+                    <input id="size-input" type="range" min="0.4" max="4" step="0.05" value="1.6" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="height-input">Extrude Depth</label>
+                      <output class="field-output" id="height-output"></output>
+                    </div>
+                    <input id="height-input" type="range" min="0.05" max="2.4" step="0.01" value="0.48" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="curve-segments-input">Curve Segments</label>
+                      <output class="field-output" id="curve-segments-output"></output>
+                    </div>
+                    <input id="curve-segments-input" type="range" min="2" max="16" step="1" value="8" />
+                  </div>
+
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="bevel-enabled-input">Bevel</label>
+                    <input id="bevel-enabled-input" type="checkbox" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="bevel-thickness-input">Bevel Thickness</label>
+                      <output class="field-output" id="bevel-thickness-output"></output>
+                    </div>
+                    <input id="bevel-thickness-input" type="range" min="0" max="0.3" step="0.005" value="0.03" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="bevel-size-input">Bevel Size</label>
+                      <output class="field-output" id="bevel-size-output"></output>
+                    </div>
+                    <input id="bevel-size-input" type="range" min="0" max="0.18" step="0.005" value="0.02" />
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Transform</span>
+                  </div>
+                  <span class="pill">Object</span>
+                </div>
+                <div class="panel-body">
+                  <div class="field-group">
+                    <div class="field-head">
+                      <span class="field-label">Scale</span>
+                    </div>
+                    <div class="triple">
+                      <input id="scale-x-input" type="number" step="0.1" value="1" />
+                      <input id="scale-y-input" type="number" step="0.1" value="1" />
+                      <input id="scale-z-input" type="number" step="0.1" value="1" />
+                    </div>
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <span class="field-label">Rotation</span>
+                    </div>
+                    <div class="triple">
+                      <input id="rotation-x-input" type="number" step="1" value="-12" />
+                      <input id="rotation-y-input" type="number" step="1" value="20" />
+                      <input id="rotation-z-input" type="number" step="1" value="0" />
+                    </div>
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <span class="field-label">Position</span>
+                    </div>
+                    <div class="triple">
+                      <input id="position-x-input" type="number" step="0.1" value="0" />
+                      <input id="position-y-input" type="number" step="0.1" value="0" />
+                      <input id="position-z-input" type="number" step="0.1" value="0" />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Material</span>
+                  </div>
+                  <span class="pill">PBR</span>
+                </div>
+                <div class="panel-body">
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="color-input">Color</label>
+                    </div>
+                    <input id="color-input" type="color" value="#7cf6ff" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="metalness-input">Metalness</label>
+                      <output class="field-output" id="metalness-output"></output>
+                    </div>
+                    <input id="metalness-input" type="range" min="0" max="1" step="0.01" value="0.78" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="roughness-input">Roughness</label>
+                      <output class="field-output" id="roughness-output"></output>
+                    </div>
+                    <input id="roughness-input" type="range" min="0" max="1" step="0.01" value="0.22" />
+                  </div>
+
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="wireframe-input">Wireframe</label>
+                    <input id="wireframe-input" type="checkbox" />
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Effects</span>
+                  </div>
+                  <span class="pill">Modular</span>
+                </div>
+                <div class="panel-body">
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="glow-enabled-input">Glow</label>
+                    <input id="glow-enabled-input" type="checkbox" checked />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="glow-intensity-input">Glow Intensity</label>
+                      <output class="field-output" id="glow-intensity-output"></output>
+                    </div>
+                    <input id="glow-intensity-input" type="range" min="0" max="3" step="0.01" value="1.15" />
+                  </div>
+
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="noise-enabled-input">Noise Distortion</label>
+                    <input id="noise-enabled-input" type="checkbox" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="noise-intensity-input">Noise Intensity</label>
+                      <output class="field-output" id="noise-intensity-output"></output>
+                    </div>
+                    <input id="noise-intensity-input" type="range" min="0" max="0.4" step="0.005" value="0.08" />
+                  </div>
+
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="wave-enabled-input">Wave Deform</label>
+                    <input id="wave-enabled-input" type="checkbox" checked />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="wave-amplitude-input">Wave Amplitude</label>
+                      <output class="field-output" id="wave-amplitude-output"></output>
+                    </div>
+                    <input id="wave-amplitude-input" type="range" min="0" max="0.5" step="0.005" value="0.09" />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="wave-frequency-input">Wave Frequency</label>
+                      <output class="field-output" id="wave-frequency-output"></output>
+                    </div>
+                    <input id="wave-frequency-input" type="range" min="0.5" max="8" step="0.1" value="2.4" />
+                  </div>
+
+                  <div class="toggle-row">
+                    <label class="toggle-label" for="chromatic-enabled-input">Chromatic Aberration</label>
+                    <input id="chromatic-enabled-input" type="checkbox" checked />
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="chromatic-intensity-input">Chromatic Amount</label>
+                      <output class="field-output" id="chromatic-intensity-output"></output>
+                    </div>
+                    <input id="chromatic-intensity-input" type="range" min="0" max="0.02" step="0.0005" value="0.004" />
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Animations</span>
+                  </div>
+                  <span class="pill">Loop</span>
+                </div>
+                <div class="panel-body">
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="animation-select">Mode</label>
+                    </div>
+                    <select id="animation-select">
+                      <option value="none" selected>None</option>
+                      <option value="zoom-out">Zoom Out</option>
+                      <option value="spin">Spin</option>
+                    </select>
+                  </div>
+
+                  <div class="field-group">
+                    <div class="field-head">
+                      <label class="field-label" for="animation-speed-input">Speed</label>
+                      <output class="field-output" id="animation-speed-output"></output>
+                    </div>
+                    <input id="animation-speed-input" type="range" min="0.1" max="1.4" step="0.05" value="0.35" />
+                  </div>
+
+                  <p class="hint">Zoom Out shrinks the word back in space. Spin rotates each letter with offset timing and angles.</p>
+                </div>
+              </section>
+
+              <section class="panel collapsed">
+                <div class="panel-head">
+                  <div class="panel-head-main">
+                    <button class="panel-toggle" type="button" aria-expanded="false">+</button>
+                    <span class="section-title">Export</span>
+                  </div>
+                  <span class="pill">Output</span>
+                </div>
+                <div class="panel-body">
+                  <button class="action-button" id="export-png-button-panel" type="button">Export PNG</button>
+                  <button class="action-button is-primary" id="export-gltf-button-panel" type="button">Export GLTF</button>
+                  <p class="hint">PNG exports the current viewport. GLTF exports the text mesh with its current transforms.</p>
+                  <p class="status" id="export-status">Ready.</p>
+                </div>
+              </section>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+
+    <script src="../js/mode-nav.js"></script>
+    <script type="module" src="./lanzoid.js"></script>
+  </body>
+</html>

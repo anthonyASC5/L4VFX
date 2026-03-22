@@ -1,0 +1,15 @@
+[
+  {
+    "label": "Helvetiker",
+    "url": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/fonts/helvetiker_regular.typeface.json",
+    "default": true
+  },
+  {
+    "label": "Optimer",
+    "url": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/fonts/optimer_regular.typeface.json"
+  },
+  {
+    "label": "Gentilis",
+    "url": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/fonts/gentilis_regular.typeface.json"
+  }
+]

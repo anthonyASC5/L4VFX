@@ -1,8 +1,26 @@
 (function () {
   const TAB_CONFIG = [
-    { href: "./motionvideo.html", label: "Motion Editor", aliases: ["./index.html", "./"] },
-    { href: "./lutgen.html", label: "LUT GEN" },
-    { href: "./crtvideo.html", label: "CRT Video" },
+    {
+      id: "motionvideo.html",
+      dir: "html",
+      label: "Motion Editor",
+      aliases: ["index.html", ""],
+    },
+    {
+      id: "lutgen.html",
+      dir: "html",
+      label: "LUT GEN",
+    },
+    {
+      id: "crtvideo.html",
+      dir: "html",
+      label: "CRT Video",
+    },
+    {
+      id: "lanzoid.html",
+      dir: "lanzoid",
+      label: "Lanzoid",
+    },
   ];
 
   function injectStyles() {
@@ -49,11 +67,37 @@
     document.head.append(style);
   }
 
-  function canonicalPath(pathname) {
+  function getLocationInfo(pathname) {
     const shortPath = pathname.split("/").pop() || "index.html";
-    const localPath = shortPath ? `./${shortPath}` : "./";
-    const match = TAB_CONFIG.find((tab) => tab.href === localPath || tab.aliases?.includes(localPath));
-    return match?.href || localPath;
+    let dir = "root";
+
+    if (pathname.includes("/html/")) {
+      dir = "html";
+    } else if (pathname.includes("/lanzoid/")) {
+      dir = "lanzoid";
+    }
+
+    return { dir, shortPath };
+  }
+
+  function resolveHref(tab) {
+    const { dir } = getLocationInfo(window.location.pathname);
+
+    if (dir === tab.dir) {
+      return `./${tab.id}`;
+    }
+
+    if (dir === "root") {
+      return `./${tab.dir}/${tab.id}`;
+    }
+
+    return `../${tab.dir}/${tab.id}`;
+  }
+
+  function canonicalPath(pathname) {
+    const { shortPath } = getLocationInfo(pathname);
+    const match = TAB_CONFIG.find((tab) => tab.id === shortPath || tab.aliases?.includes(shortPath));
+    return match?.id || shortPath;
   }
 
   function rebuildNav(nav) {
@@ -61,10 +105,10 @@
     const linkTarget = window.self !== window.top ? ' target="_top"' : "";
     nav.innerHTML = TAB_CONFIG.map((tab) => {
       const classes = ["mode-tab"];
-      if (tab.href === activeHref) {
+      if (tab.id === activeHref) {
         classes.push("active");
       }
-      return `<a class="${classes.join(" ")}" href="${tab.href}"${linkTarget}>${tab.label}</a>`;
+      return `<a class="${classes.join(" ")}" href="${resolveHref(tab)}"${linkTarget}>${tab.label}</a>`;
     }).join("");
   }
 
@@ -75,13 +119,13 @@
 
     const logo = document.createElement("a");
     logo.className = "site-home-logo";
-    logo.href = "./motionvideo.html";
+    logo.href = resolveHref(TAB_CONFIG[0]);
     if (window.self !== window.top) {
       logo.target = "_top";
     }
     logo.setAttribute("aria-label", "Motion Editor home");
     logo.innerHTML = "<span>VIDEO</span>";
-    if (canonicalPath(window.location.pathname) === "./motionvideo.html") {
+    if (canonicalPath(window.location.pathname) === TAB_CONFIG[0].id) {
       logo.classList.add("is-home");
     }
     document.body.append(logo);

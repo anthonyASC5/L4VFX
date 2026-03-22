@@ -111,6 +111,8 @@ const splitToggleButton = document.getElementById("split-toggle-button");
 const lutSizeSelect = document.getElementById("lut-size");
 const conversionLutSelect = document.getElementById("conversion-lut-select");
 const filterLutSelect = document.getElementById("filter-lut-select");
+const filterRack = document.getElementById("filter-rack");
+const filterRackCount = document.getElementById("filter-rack-count");
 
 const exposureOutput = document.getElementById("exposure-output");
 const contrastOutput = document.getElementById("contrast-output");
@@ -326,53 +328,66 @@ const CONVERSION_LUT_OPTIONS = Object.freeze([
   },
 ]);
 
-const FILTER_LUT_OPTIONS = Object.freeze([
-  {
-    key: "cine-basic",
-    label: "Cine Basic",
-    file: "FG_CineBasic.cube",
-  },
-  {
-    key: "cine-bright",
-    label: "Cine Bright",
-    file: "FG_CineBright.cube",
-  },
-  {
-    key: "cine-cold",
-    label: "Cine Cold",
-    file: "FG_CineCold.cube",
-  },
-  {
-    key: "cine-drama",
-    label: "Cine Drama",
-    file: "FG_CineDrama.cube",
-  },
-  {
-    key: "cine-teal-orange-1",
-    label: "Cine Teal & Orange 1",
-    file: "FG_CineTeal&Orange1.cube",
-  },
-  {
-    key: "cine-teal-orange-2",
-    label: "Cine Teal & Orange 2",
-    file: "FG_CineTeal&Orange2.cube",
-  },
-  {
-    key: "cine-vibrant",
-    label: "Cine Vibrant",
-    file: "FG_CineVibrant.cube",
-  },
-  {
-    key: "cine-warm",
-    label: "Cine Warm",
-    file: "FG_CineWarm.cube",
-  },
-  {
-    key: "vintage",
-    label: "Vintage",
-    file: "01_Vintage_LUTs_Vintage.cube",
-  },
+const FILTER_LUT_FILES = Object.freeze([
+  "FG_CineBasic.cube",
+  "FG_CineBright.cube",
+  "FG_CineCold.cube",
+  "FG_CineDrama.cube",
+  "FG_CineTeal&Orange1.cube",
+  "FG_CineTeal&Orange2.cube",
+  "FG_CineVibrant.cube",
+  "FG_CineWarm.cube",
+  "01_Vintage_LUTs_Vintage.cube",
+  "vintage1.cube",
+  "vintage2.cube",
+  "vintage3.cube",
+  "vintage4.cube",
+  "vintage5.cube",
+  "The Rise of Skywalker.cube",
+  "Ultimate Orange and Teal.cube",
 ]);
+
+const FILTER_LUT_LABEL_OVERRIDES = Object.freeze({
+  "FG_CineBasic.cube": "Cine Basic",
+  "FG_CineBright.cube": "Cine Bright",
+  "FG_CineCold.cube": "Cine Cold",
+  "FG_CineDrama.cube": "Cine Drama",
+  "FG_CineTeal&Orange1.cube": "Cine Teal & Orange 1",
+  "FG_CineTeal&Orange2.cube": "Cine Teal & Orange 2",
+  "FG_CineVibrant.cube": "Cine Vibrant",
+  "FG_CineWarm.cube": "Cine Warm",
+  "01_Vintage_LUTs_Vintage.cube": "Vintage Classic",
+  "The Rise of Skywalker.cube": "The Rise of Skywalker",
+  "Ultimate Orange and Teal.cube": "Ultimate Orange and Teal",
+});
+
+function humanizeFilterFile(file) {
+  const override = FILTER_LUT_LABEL_OVERRIDES[file];
+  if (override) {
+    return override;
+  }
+
+  const stem = file.replace(/\.[^.]+$/, "");
+  const expanded = stem
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Za-z])(\d)/g, "$1 $2")
+    .replace(/(\d)([A-Za-z])/g, "$1 $2");
+
+  return expanded
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+const FILTER_LUT_OPTIONS = Object.freeze(FILTER_LUT_FILES.map((file) => ({
+  key: sanitizeFileStem(file),
+  label: humanizeFilterFile(file),
+  file,
+})));
+
+const FILTER_LUT_OPTION_MAP = new Map(FILTER_LUT_OPTIONS.map((option) => [option.key, option]));
 
 function cloneWheelSnapshot(wheels = DEFAULT_WHEELS) {
   return {
@@ -1229,7 +1244,7 @@ function applySnapshot(snapshotLike) {
   conversionLutSelect.value = CONVERSION_LUT_OPTIONS.some((option) => option.key === snapshot.conversionLut)
     ? snapshot.conversionLut
     : DEFAULT_SNAPSHOT.conversionLut;
-  filterLutSelect.value = FILTER_LUT_OPTIONS.some((option) => option.key === snapshot.filterLut)
+  filterLutSelect.value = FILTER_LUT_OPTION_MAP.has(snapshot.filterLut)
     ? snapshot.filterLut
     : DEFAULT_SNAPSHOT.filterLut;
   state.wheels = cloneWheelSnapshot(snapshot.wheels);
@@ -1274,6 +1289,8 @@ function buildPipelineSummary(snapshot) {
 
 function syncUi(snapshot = readSnapshot()) {
   syncControlOutputs(snapshot);
+  filterLutSelect.value = FILTER_LUT_OPTION_MAP.has(snapshot.filterLut) ? snapshot.filterLut : "";
+  syncFilterRack(filterLutSelect.value);
 
   splitToggleButton.classList.toggle("active", snapshot.view.splitView);
   splitToggleButton.setAttribute("aria-pressed", String(snapshot.view.splitView));
@@ -1374,6 +1391,33 @@ function populateFilterLutSelect() {
     '<option value="">None</option>',
     ...FILTER_LUT_OPTIONS.map((option) => `<option value="${option.key}">${option.label}</option>`),
   ].join("");
+}
+
+function populateFilterRack() {
+  if (!filterRack) {
+    return;
+  }
+
+  filterRack.innerHTML = [
+    '<button class="button filter-chip is-bypass" type="button" data-filter-key="">Bypass</button>',
+    ...FILTER_LUT_OPTIONS.map(
+      (option) => `<button class="button filter-chip" type="button" data-filter-key="${option.key}">${option.label}</button>`,
+    ),
+  ].join("");
+
+  if (filterRackCount) {
+    filterRackCount.textContent = `${FILTER_LUT_OPTIONS.length} loaded`;
+  }
+}
+
+function syncFilterRack(activeKey = "") {
+  if (!filterRack) {
+    return;
+  }
+
+  filterRack.querySelectorAll("[data-filter-key]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.filterKey === activeKey);
+  });
 }
 
 function parseCubeLut(text, label) {
@@ -1567,6 +1611,7 @@ async function loadFilterLut(key, silent = false) {
   if (!key) {
     state.activeFilterLutKey = "";
     state.activeFilterLut = null;
+    syncFilterRack("");
     if (!silent) {
       setStatus("Filter LUT bypassed.");
     }
@@ -1574,10 +1619,11 @@ async function loadFilterLut(key, silent = false) {
     return null;
   }
 
-  const option = FILTER_LUT_OPTIONS.find((entry) => entry.key === key);
+  const option = FILTER_LUT_OPTION_MAP.get(key);
   if (!option) {
     state.activeFilterLutKey = "";
     state.activeFilterLut = null;
+    syncFilterRack("");
     scheduleRender();
     return null;
   }
@@ -1589,6 +1635,7 @@ async function loadFilterLut(key, silent = false) {
       }
       state.activeFilterLutKey = key;
       state.activeFilterLut = state.filterLutCache.get(key);
+      syncFilterRack(key);
       if (!silent) {
         setStatus(`Loaded ${option.label}.`);
       }
@@ -1614,6 +1661,7 @@ async function loadFilterLut(key, silent = false) {
 
     state.activeFilterLutKey = key;
     state.activeFilterLut = parsed;
+    syncFilterRack(key);
     if (!silent) {
       setStatus(`Loaded ${option.label}.`);
     }
@@ -1624,6 +1672,7 @@ async function loadFilterLut(key, silent = false) {
     if (requestId === state.filterLutRequestId) {
       state.activeFilterLutKey = "";
       state.activeFilterLut = null;
+      syncFilterRack("");
       setStatus(error instanceof Error ? error.message : "Filter LUT load failed.");
       scheduleRender();
     }
@@ -2769,6 +2818,16 @@ function bindPipelineInputs() {
     syncUi(readSnapshot());
     void loadFilterLut(filterLutSelect.value);
   });
+
+  filterRack?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-filter-key]");
+    if (!button) {
+      return;
+    }
+    filterLutSelect.value = button.dataset.filterKey || "";
+    syncUi(readSnapshot());
+    void loadFilterLut(filterLutSelect.value);
+  });
 }
 
 function bindActionInputs() {
@@ -2820,6 +2879,7 @@ function bindActionInputs() {
 function init() {
   populateConversionLutSelect();
   populateFilterLutSelect();
+  populateFilterRack();
   bindPanelToggles();
   bindWheelInputs();
   bindCurveInputs();

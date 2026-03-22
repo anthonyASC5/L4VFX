@@ -441,6 +441,7 @@ const EFFECT_COLORS = Object.freeze({
   colorCentroid: "#ff9fd7",
   imageFlash: "#ffe57f",
   filmMatteEffect: "#f3f3f3",
+  codeEffect: "#7dff9f",
 });
 
 const DEFAULT_BLEND = "screen";
@@ -597,6 +598,29 @@ const EFFECT_DEFINITIONS = [
       createSlider("framePadding", "Frame Padding", 0, 48, 1, 0),
       createSlider("grainIntensity", "Grain Intensity", 0, 1, 0.01),
       createSlider("flickerIntensity", "Flicker Intensity", 0, 1, 0.01),
+    ],
+  },
+  {
+    type: "codeEffect",
+    label: "Code Effect",
+    buttonLabel: "Code Effect",
+    accent: EFFECT_COLORS.codeEffect,
+    defaultBlend: "normal",
+    defaultParams: {
+      density: 0.62,
+      contrast: 1.18,
+      colorMix: 0.8,
+      hue: 0.34,
+      glow: 0.18,
+      glyphSet: 2,
+    },
+    controls: [
+      createSlider("density", "Density", 0.15, 1, 0.01),
+      createSlider("contrast", "Contrast", 0.6, 2.4, 0.01),
+      createSlider("colorMix", "Color Mix", 0, 1, 0.01),
+      createSlider("hue", "Hue", 0, 1, 0.01),
+      createSlider("glow", "Glow", 0, 1, 0.01),
+      createSlider("glyphSet", "Glyph Set", 0, 2, 1, 0),
     ],
   },
   {
@@ -1041,6 +1065,7 @@ const EFFECT_TYPE_TO_RACK_GROUP = Object.freeze({
   punchBlackWhite: "color",
   imageFlash: "new",
   filmMatteEffect: "new",
+  codeEffect: "new",
   sparseOpticalFlow: "particles",
   harrisCorners: "particles",
   orbTracking: "particles",
@@ -4363,6 +4388,104 @@ function renderPaperStackLayer(layer, analysis) {
   finishLayerTrail(layer);
 }
 
+const CODE_EFFECT_GLYPH_SETS = Object.freeze([
+  " .,:;i1tfLCG08@",
+  "01[]{}<>/\\\\|+=-*#%@",
+  "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789ABCDEF#$%&*+?",
+]);
+
+function getCodeEffectGlyphSet(index) {
+  const normalizedIndex = clamp(Math.round(index ?? 0), 0, CODE_EFFECT_GLYPH_SETS.length - 1);
+  return CODE_EFFECT_GLYPH_SETS[normalizedIndex];
+}
+
+function sampleRegionAverageRgb(analysis, startX, startY, width, height, sampleStride = 1) {
+  const clampedStartX = clamp(Math.floor(startX), 0, analysis.width - 1);
+  const clampedStartY = clamp(Math.floor(startY), 0, analysis.height - 1);
+  const clampedEndX = clamp(Math.ceil(startX + width), clampedStartX + 1, analysis.width);
+  const clampedEndY = clamp(Math.ceil(startY + height), clampedStartY + 1, analysis.height);
+  const stride = Math.max(1, Math.floor(sampleStride));
+
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let samples = 0;
+
+  for (let y = clampedStartY; y < clampedEndY; y += stride) {
+    const row = y * analysis.width;
+    for (let x = clampedStartX; x < clampedEndX; x += stride) {
+      const px = (row + x) * 4;
+      red += analysis.data[px];
+      green += analysis.data[px + 1];
+      blue += analysis.data[px + 2];
+      samples += 1;
+    }
+  }
+
+  if (!samples) {
+    return { r: 0, g: 0, b: 0 };
+  }
+
+  return {
+    r: Math.round(red / samples),
+    g: Math.round(green / samples),
+    b: Math.round(blue / samples),
+  };
+}
+
+function renderCodeEffectLayer(layer, analysis) {
+  const state = ensureLayerState(layer, analysis.width, analysis.height);
+  const ctx = layer.runtime.ctx;
+  const density = clamp(layer.params.density ?? 0.62, 0.15, 1);
+  const contrast = clamp(layer.params.contrast ?? 1.18, 0.6, 2.4);
+  const colorMix = clamp(layer.params.colorMix ?? 0.8, 0, 1);
+  const glow = clamp(layer.params.glow ?? 0.18, 0, 1);
+  const hue = wrapUnit(layer.params.hue ?? 0.34);
+  const glyphs = getCodeEffectGlyphSet(layer.params.glyphSet ?? 2);
+  const tintColor = hslToRgb(hue, 0.9, 0.68);
+  const shadowColor = rgba(tintColor, 0.24 + glow * 0.46);
+  const background = mixRgb({ r: 2, g: 4, b: 6 }, mixRgb(tintColor, { r: 0, g: 0, b: 0 }, 0.92), 0.18);
+  const blockHeight = Math.max(8, Math.round(10 + (1 - density) * 24));
+  const blurRadius = Math.max(0, Math.round((1 - density) * 2));
+  const luma = ensureBlurredLuma(analysis, blurRadius);
+
+  ctx.clearRect(0, 0, analysis.width, analysis.height);
+  ctx.fillStyle = rgba(background, 1);
+  ctx.fillRect(0, 0, analysis.width, analysis.height);
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.font = `${blockHeight}px "IBM Plex Mono", "Consolas", "SFMono-Regular", monospace`;
+  const cellWidth = Math.max(6, Math.round(ctx.measureText("M").width || (blockHeight * 0.62)));
+  const sampleStride = Math.max(1, Math.floor(Math.min(cellWidth, blockHeight) / 4));
+
+  ctx.shadowBlur = 2 + glow * 10;
+  ctx.shadowColor = shadowColor;
+
+  for (let y = 0; y < analysis.height; y += blockHeight) {
+    const row = Math.min(analysis.height - 1, y + Math.floor(blockHeight * 0.5)) * analysis.width;
+
+    for (let x = 0; x < analysis.width; x += cellWidth) {
+      const sampleIndex = row + Math.min(analysis.width - 1, x + Math.floor(cellWidth * 0.5));
+      const normalizedLuma = clamp(((luma[sampleIndex] / 255) - 0.5) * contrast + 0.5, 0, 1);
+      const glyphIndex = Math.min(glyphs.length - 1, Math.floor(normalizedLuma * (glyphs.length - 1)));
+      const glyph = glyphs[glyphs.length - 1 - glyphIndex] || " ";
+      if (glyph === " ") {
+        continue;
+      }
+
+      const average = sampleRegionAverageRgb(analysis, x, y, cellWidth, blockHeight, sampleStride);
+      const glyphColor = mixRgb(tintColor, average, colorMix);
+      const alpha = 0.4 + normalizedLuma * 0.7;
+      ctx.fillStyle = rgba(glyphColor, alpha);
+      ctx.fillText(glyph, x, y);
+    }
+  }
+
+  state.lastCodeCellWidth = cellWidth;
+  state.lastCodeCellHeight = blockHeight;
+  finishLayerTrail(layer);
+}
+
 function renderSkinToneLayer(layer, analysis) {
   // Skin Mask isolates likely skin pixels directly from color space thresholds so it can be used
   // as a clean matte layer without needing motion to be present.
@@ -4470,6 +4593,11 @@ export function renderMotionVideoEffectLayer({
 
   if (layer.type === "filmMatteEffect") {
     renderFilmMatteEffectLayer(layer, analysis, sourceFrameCanvas, mediaTime, elapsed);
+    return true;
+  }
+
+  if (layer.type === "codeEffect") {
+    renderCodeEffectLayer(layer, analysis);
     return true;
   }
 
