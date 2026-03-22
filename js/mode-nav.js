@@ -1,6 +1,7 @@
 (function () {
   const TAB_CONFIG = [
     { href: "./motionvideo.html", label: "Motion Editor", aliases: ["./index.html", "./"] },
+    { href: "./lutgen.html", label: "LUT GEN" },
     { href: "./crtvideo.html", label: "CRT Video" },
   ];
 
